@@ -20,9 +20,9 @@ For the design wiki, read [docs/INDEX.md](docs/INDEX.md).
 
 ## Project status
 
-**Three units built, nothing usable yet.** For what exists, what proves it and what does not exist
-yet, read [docs/progress.md](docs/progress.md) — it is the only place that state is kept, so this
-section stays a pointer rather than a second copy that ages.
+**Complete and unproven — no consumer runs it yet.** For what exists, what proves it and what does
+not exist yet, read [docs/progress.md](docs/progress.md) — it is the only place that state is kept,
+so this section stays a pointer rather than a second copy that ages.
 
 ## Where to read first
 
@@ -65,7 +65,18 @@ Agreed in the design conversation of 2026-09-08. Every implementation decision m
    active and which aliases need `migrate --database <alias>`. They come from the same call, because
    the failure when they disagree is silent: a router refuses the tables while Django records the
    migrations as applied, leaving a database that looks migrated and holds nothing.
-8. **`INSTALLED_APPS` is the consumer's, and unvalidatable.** A library left out of it never has its
+8. **Nothing on the settings path can log, and errors there raise instead.** `cascade_log` reaches
+   Evennia's `logger.log_file`, which reads `settings.LOG_DIR` — before `django.setup()` that raises
+   `ImproperlyConfigured`, tested rather than assumed. So `discover_specs`, `validate_specs`,
+   `resolve_database`, `CascadeRouter` and `configure()` never call the shim; their failures raise,
+   and the traceback is the record, since the server does not start. The shim is **not** given a
+   second `except` for this: it stays verbatim across the libraries, and one that quietly worked
+   everywhere would invite calls from where they do not belong.
+
+   Logging begins once Django is up — the boot check and the migrate helper. **Log the failures, not
+   the happy path**, plus one line each for having booted and having migrated so a reader can tell
+   which run they are looking at.
+9. **`INSTALLED_APPS` is the consumer's, and unvalidatable.** A library left out of it never has its
    `ready()` run, so nothing of ours can notice. Everything after that point is validated as hard as
    it can be — spec fields when `configure()` runs, and the presence cross-check at boot.
 
@@ -119,12 +130,25 @@ evennia-database-cascade/
 ├── src/
 │   └── evennia_database_cascade/
 │       ├── __init__.py        # re-exports the consumer-facing surface
-│       ├── discovery.py       # discover_specs / validate_specs, and their errors
+│       ├── apps.py            # AppConfig; ready() runs the boot check
+│       ├── config.py          # every constant, the settings accessors, check_settings()
+│       ├── configure.py       # configure() — the one call a consumer makes
+│       ├── discovery.py       # discover_specs / validate_specs
 │       ├── log.py             # the logging shim
+│       ├── management/
+│       │   └── commands/
+│       │       └── cascade_migrate.py
+│       ├── migrate.py         # migrate_all()
+│       ├── resolve.py         # the three rungs, and the split rule
+│       ├── router.py          # CascadeRouter
 │       ├── spec.py            # AliasSpec
 │       └── tests.py           # unit tests (run via runtests.py)
 └── tests/                     # standalone test settings (test_settings.py, urls.py)
 ```
+
+**Everything above is on the settings path except `apps.py`, `migrate.py` and the management
+command.** Those three run after `django.setup()`, so they may import Django and they may log. The
+rest may do neither — see principles 4, 5 and 8.
 
 ## Tools and environment
 

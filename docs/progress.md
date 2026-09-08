@@ -3,6 +3,56 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-08 — The rest of it: resolution, routing, configure, boot and migrate
+
+101 tests. Every piece is built; no consumer game runs it yet.
+
+**`resolve_database`** places one alias through the three rungs — its own URL, the common one, then a
+SQLite file under `<game_dir>/server/`. A variable set to an empty string counts as unset, because an
+exported-but-empty variable is an ordinary deployment state and the parser should never see one. Its
+single refusal is a spec with `allow_sharing_common_db=False` landing on the shared rung: falling
+through to SQLite instead would put a production database in a local file on a deployment that is
+otherwise not using one. Cases `RS-01` to `RS-12`.
+
+**`is_split` and `split_aliases`** answer whether an alias is on a database of its own, from the
+environment alone. Two callers need that answer in two processes, and the failure when they disagree
+is silent — a router refusing an alias's tables while Django records its migrations as applied.
+Cases `SL-01` to `SL-10`.
+
+**`CascadeRouter`** replaces the five hand-written routers across FCM with one instance per spec.
+Django ships no router implementation, so those five were the same twenty-five lines with three
+values changed, and all three are on the spec. Routing queries and permitting migrations stay
+separate: for the archive it lets Evennia's forty-two tables be created there while still sending
+every `ObjectDB` query to `default`. Cases `RT-01` to `RT-13`.
+
+**`configure()`** is the five steps in eight lines, and the only call a consumer makes. It copies the
+databases dict rather than editing the one it was handed. Its one check of its own compares each
+alias's resolved SQLite path against `DATABASES["default"]["NAME"]` — not against the literal
+`evennia.db3`, which is Evennia's default rather than a fixed name, so a consumer who renamed their
+game database would have got no protection from a hardcoded check. Cases `CF-01` to `CF-13`.
+
+**The boot check** asks two questions at `ready()`, the first point where Django is up. Did a library
+that depends on us forget to declare anything — read off its distribution's `Requires-Dist`, skipping
+optional extras? And did every declared alias reach `DATABASES`? Cases `BC-01` to `BC-12`.
+
+**`evennia cascade_migrate`** runs the bare migrate and then one per split alias, deriving that list
+through the same `split_aliases` that chose the routers. Options are forwarded to Django's `migrate`
+untouched; `database` is refused, since deciding that is the helper's whole job. Cases `MG-01` to
+`MG-10`.
+
+**Two things were found by running it rather than by reasoning.**
+
+Evennia's own `INSTALLED_APPS` carries AppConfig paths — `evennia.web.utils.adminsite.EvenniaAdminApp`
+— not only package names. Django accepts both; `discover_specs` did not, and `django.setup()` died on
+a stock gamedir. Entries now drop trailing segments until they reach a package, which handles
+`<module>.<Class>` and `<package>.apps.<Class>` without importing the class or asking Django, neither
+of which is available from a settings module. Case `DS-12`.
+
+And the logging shim raises `ImproperlyConfigured` before `django.setup()`, tested rather than
+assumed. So nothing on the settings path logs at all: those failures raise, and the traceback is the
+record. The shim was **not** given a second `except` for it — it stays verbatim across the libraries,
+and one that quietly worked everywhere would invite calls from where they do not belong. Principle 8.
+
 ## 2026-09-08 — Three units: finding the specs, declaring one, and judging the set
 
 30 tests. Nothing resolves a database yet — the resolver, the router, `configure()` and the migrate

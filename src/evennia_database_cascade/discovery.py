@@ -29,6 +29,8 @@ the package ``__init__.py``, which is the first file a consumer's
 
 import importlib
 
+from .config import SPEC_ATTRIBUTE, SPEC_MODULE_NAME
+
 
 class MissingAppError(ImportError):
     """An app listed in ``INSTALLED_APPS`` could not be imported at all.
@@ -99,21 +101,16 @@ def discover_specs(installed_apps):
     """
     specs = []
     for app in installed_apps:
-        module_name = f"{app}.db_spec"
+        package = _app_package(app)
+        if package is None:
+            _refuse_the_missing_app(app)
+        module_name = f"{package}.{SPEC_MODULE_NAME}"
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as err:
             # The app simply has no spec — the ordinary case, and a skip.
             if err.name == module_name:
                 continue
-            # No app, so there was never a db_spec to look for. A different
-            # fault from a broken spec, and it gets its own message.
-            if err.name == app:
-                raise MissingAppError(
-                    f"{app!r} is listed in INSTALLED_APPS but could not be "
-                    f"imported. Check the name for a typo, and that the "
-                    f"package is installed."
-                ) from err
             # The spec is there and one of its own imports is broken. Left to
             # Python this is indistinguishable from the line above, so the
             # library would drop the app, leave its alias unconfigured, and
@@ -124,8 +121,71 @@ def discover_specs(installed_apps):
                 f"import — until it works, {app} has no database alias "
                 f"configured and its tables will land in the game database."
             ) from err
-        specs.append(module.SPEC)
+        specs.append(getattr(module, SPEC_ATTRIBUTE))
     return specs
+
+
+def _refuse_the_missing_app(app):
+    """Raise for an ``INSTALLED_APPS`` entry with no package behind it.
+
+    The absence is found by asking rather than by failing, so there is no
+    exception to chain. One import is attempted here, on a path that is
+    already about to raise, purely so the consumer's traceback carries
+    Python's own account of what could not be found.
+
+    Args:
+        app (str): the entry as written in ``INSTALLED_APPS``.
+
+    Raises:
+        MissingAppError: always.
+    """
+    message = (
+        f"{app!r} is listed in INSTALLED_APPS but no package behind it could "
+        f"be found. Check the name for a typo, and that the package is "
+        f"installed."
+    )
+    try:
+        importlib.import_module(app)
+    except ImportError as err:
+        raise MissingAppError(message) from err
+    raise MissingAppError(message)
+
+
+def _app_package(app):
+    """The importable package behind an ``INSTALLED_APPS`` entry.
+
+    Django accepts two forms, and Evennia's own defaults use both —
+    ``evennia.objects`` names a package, while
+    ``evennia.web.utils.adminsite.EvenniaAdminApp`` names an ``AppConfig``
+    class. Treating the second as a package makes every stock gamedir look
+    like a missing app.
+
+    Trailing segments are dropped until a package is reached, which handles
+    both the ``<module>.<Class>`` and the ``<package>.apps.<Class>`` shapes
+    without needing to import the class or ask Django, neither of which is
+    available from a settings module.
+
+    Args:
+        app (str): the entry as written in ``INSTALLED_APPS``.
+
+    Returns:
+        str or None: the package name, or None where nothing behind it is a
+            package — a typo, or something genuinely not installed.
+    """
+    from importlib.util import find_spec
+
+    candidate = app
+    while candidate:
+        try:
+            found = find_spec(candidate)
+        except (ImportError, ValueError):
+            found = None
+        if found is not None and found.submodule_search_locations is not None:
+            return candidate
+        if "." not in candidate:
+            return None
+        candidate = candidate.rsplit(".", 1)[0]
+    return None
 
 
 def validate_specs(specs):

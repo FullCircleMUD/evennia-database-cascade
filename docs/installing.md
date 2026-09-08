@@ -2,10 +2,6 @@
 
 What a game does to run this library, and what a library that owns tables does to be found by it.
 
-**`configure()` is not built yet.** Steps 1, 2, 4 and 5 describe the agreed design so a consumer can
-see the shape and a session building it has something to build against — treat those code blocks as a
-specification. Step 3, the spec itself, is real and works today.
-
 ## 1. Install the package
 
 Nothing is published yet, so install from a checkout:
@@ -18,17 +14,14 @@ A library that declares a spec depends on this one, so installing that library b
 
 ## 2. Add the app
 
-In your settings:
+In your settings, alongside every library whose tables you want placed:
 
 ```python
 INSTALLED_APPS += ["evennia_database_cascade"]
 ```
 
-Alongside every library whose tables you want placed — each of those is an app in its own right and
-goes in the same list.
-
-This is what runs the boot cross-check. Without it the library still resolves your aliases, and
-nothing checks the result.
+This is what runs the boot check. Without it your aliases are still resolved — `configure()` does
+that — but nothing checks the result afterwards.
 
 ## 3. Declare a spec, if your own game owns tables
 
@@ -71,18 +64,18 @@ the example, since Evennia's own tables are exactly what belongs in the archive.
 One call, after your `INSTALLED_APPS` edits, in the same settings module:
 
 ```python
+import os
 from evennia_database_cascade import configure
 
-DATABASES, DATABASE_ROUTERS = configure(DATABASES, GAME_DIR, os.environ)
+DATABASES, DATABASE_ROUTERS = configure(
+    DATABASES, INSTALLED_APPS, GAME_DIR, os.environ
+)
 ```
 
-It scans `INSTALLED_APPS` for apps declaring a spec, resolves each one's alias, and returns
-`DATABASES` with those entries filled in and `DATABASE_ROUTERS` holding the routers for exactly the
-aliases that need one.
-
-`configure()` takes one more argument, `common_url_var`, defaulting to `"DATABASE_URL"` — the
-variable naming the database every alias shares when it has none of its own. A game using a different
-name for that passes it here, once, rather than repeating it in every spec.
+It scans `INSTALLED_APPS` for apps declaring a spec, validates the set, resolves each alias, and
+returns `DATABASES` with those entries filled in and `DATABASE_ROUTERS` holding a router for exactly
+the aliases that need one. Your `default` entry is untouched, and the dict you passed in is not
+modified — the return is a copy.
 
 **Order matters and nothing can check it.** A spec belonging to an app added below this line is not
 there to be found. Keep the call at the end of the database section of your settings.
@@ -114,40 +107,88 @@ SQLite.
 ## 6. Migrate
 
 ```
+evennia cascade_migrate
+```
+
+It runs a bare `migrate`, then `migrate --database <alias>` for every alias on a database of its own,
+and reports which those were. Options are forwarded, so `--verbosity 2` and `--noinput` work as
+usual.
+
+Doing it by hand is the same two steps:
+
+```
 evennia migrate
 evennia migrate --database <alias>   # once per alias on its own database
 ```
 
 An alias sharing the game's database is covered by the bare call. An alias on its own is not — its
-router refuses those tables everywhere else, so it needs the second form. The library reports which
-aliases those are, so the list is read rather than remembered.
+router refuses those tables everywhere else, so it needs the second form. Miss one and Django records
+those migrations as applied with no tables created, and nothing errors.
+
+A deploy script with its own diagnostics can call `migrate_all()` directly rather than the command;
+it is the same code, and the command is a four-line wrapper.
 
 ## Required settings
 
-**None.** This library reads no Django settings of its own. Everything it needs arrives as arguments
-to `configure()` or as the environment variables in step 5 — deliberately, because the settings
-module is still executing when this runs, so nothing can read `settings.X` at that point anyway.
+**None.** Everything the library needs arrives as arguments to `configure()` or as the environment
+variables in step 5 — deliberately, since the settings module is still executing when `configure()`
+runs, so nothing can read `settings.X` at that point.
 
 ## Optional settings
 
-**None**, for the same reason. The two connection knobs that would otherwise be settings —
-`CONN_MAX_AGE` and the Postgres session options — are planned as fields on a spec, so they travel
-with the library that needs them rather than becoming another thing a consumer has to set.
-`[TBD — needs discussion: whether they sit on the spec, and what the defaults are.]`
+**`CASCADE_COMMON_URL_VAR`** — the name of the variable holding the shared database. Defaults to
+`DATABASE_URL`.
+
+Declare it and pass it in, so one value serves both processes:
+
+```python
+CASCADE_COMMON_URL_VAR = "DATABASE_URL_SHARD0"
+
+DATABASES, DATABASE_ROUTERS = configure(
+    DATABASES, INSTALLED_APPS, GAME_DIR, os.environ,
+    common_url_var=CASCADE_COMMON_URL_VAR,
+)
+```
+
+It is a setting rather than only an argument because the value has to be known twice: `configure()`
+reads it from your settings module, and `evennia cascade_migrate` runs later in a different process
+and reads it back from the same place.
+
+**Where this matters:** a deployment running several instances from one codebase — a router and a
+shard, each with its own settings module and its own game database. Each declares its own value, and
+each is launched with `--settings`. Aliases genuinely shared between them carry their own
+`DATABASE_URL_<ALIAS>` and never reach this rung at all.
+
+The two connection knobs a resolved entry could carry — `CONN_MAX_AGE` and Postgres session options —
+are not settings and not implemented.
+`[TBD — needs discussion: whether they become spec fields, and what the defaults are.]`
 
 ## What is not checked for you
 
 - **That the library is in `INSTALLED_APPS`.** Leave it out and `AppConfig.ready()` never runs, so
-  the boot cross-check never happens. This is the one gap nothing can close: a library that is not
+  the boot check never happens. This is the one gap nothing can close: a library that is not
   installed cannot notice that it is not installed.
 - **That `configure()` is called after your `INSTALLED_APPS` edits.** A spec added below the call is
   invisible to it. The boot check catches the *consequence* — an app with a spec whose alias is
   missing from `DATABASES` — and names the app, but it cannot see the ordering that caused it.
+- **That your own game's `db_spec` exists.** A library that depends on this one and ships no spec is
+  caught at boot, by reading its distribution's requirements. A gamedir is not a distribution, so
+  there is nothing to read and nothing to check.
 - **That `DATABASE_URL_<ALIAS>` points where you meant.** The environment is the declaration; the
   library reads it and does not second-guess it. A URL naming the wrong host resolves cleanly and
   fails at first connection.
-- **That you ran the per-alias migrations.** The library reports which aliases need one. Skipping it
-  leaves that alias with no tables.
-- **That a library's `db_spec` says what its author intended.** A spec claiming the wrong alias, or
-  declaring `allow_sharing_common_db=True` for a library whose tables collide with Evennia's, is
-  valid as far as this library can tell.
+- **That two instances sharing a database run the same library versions.** One can apply a migration
+  the other does not know about. True of any shared database, and not visible from inside one
+  instance.
+- **That a library's spec says what its author intended.** A spec claiming the wrong alias, or
+  allowing the shared rung for a library whose tables collide with Evennia's, is valid as far as this
+  library can tell.
+
+## What you see when something is wrong
+
+Nothing in `settings.py` can log — the shim reaches `settings.LOG_DIR`, which does not exist yet — so
+failures there raise and the server does not start. The traceback is the record.
+
+From the boot check onwards there is `cascade.log`, beside `server.log` in your `LOG_DIR`. It carries
+one line per boot and per migration run, and every failure. It stays quiet otherwise, so anything in
+it beyond those two lines is worth reading.

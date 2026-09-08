@@ -20,6 +20,9 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
+
+from django.core.exceptions import ImproperlyConfigured
 
 import evennia_database_cascade
 from evennia_database_cascade import AliasSpec
@@ -31,6 +34,67 @@ from evennia_database_cascade.discovery import (
     discover_specs,
     validate_specs,
 )
+from evennia_database_cascade import config as config_module
+from evennia_database_cascade import configure
+from evennia_database_cascade import router as router_module
+from evennia_database_cascade import migrate as migrate_module
+from evennia_database_cascade.config import check_settings, get_common_url_var
+from evennia_database_cascade.log import cascade_log
+from evennia_database_cascade.migrate import migrate_all
+from evennia_database_cascade.configure import GameDatabaseCollision
+from evennia_database_cascade.resolve import (
+    SharedDatabaseRefused,
+    alias_url_variable,
+    is_split,
+    resolve_database,
+    split_aliases,
+)
+from evennia_database_cascade.router import CascadeRouter
+
+# A game directory that need not exist — rung 3 builds a path, it does not
+# create or open a file.
+GAME_DIR = os.path.join("some", "gamedir")
+
+OWN_URL = "postgres://own_user:pw@own.host:5432/own_db"
+COMMON_URL = "postgres://common_user:pw@common.host:5432/common_db"
+
+
+def django_imports(module):
+    """Every Django import a module runs at import time.
+
+    Read from the AST rather than by importing: Django is configured inside
+    this suite, so an import that would break a consumer's settings module
+    succeeds here and proves nothing.
+
+    Function bodies are skipped, because the constraint is about import
+    *time*. ``from django.conf import settings`` at module scope runs while
+    the consumer's settings module is still executing; the same line inside
+    ``check_settings()`` runs at ``ready()``, where Django is up. Class
+    bodies and ``try`` blocks are not skipped — those do run on import.
+    """
+    imported = []
+
+    def collect(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(child, ast.Import):
+                imported.extend(alias.name for alias in child.names)
+            elif isinstance(child, ast.ImportFrom):
+                imported.append(child.module or "")
+            collect(child)
+
+    collect(ast.parse(pathlib.Path(module.__file__).read_text()))
+    return [name for name in imported if name.split(".")[0] == "django"]
+
+
+def model(app_label):
+    """A model-shaped object carrying an app label, for the router cases."""
+    return type(
+        "FakeModel",
+        (),
+        {"_meta": type("FakeMeta", (), {"app_label": app_label})()},
+    )()
 
 
 # A db_spec module as a consumer library would write one. The spec object is
@@ -49,6 +113,20 @@ SPEC = Spec({alias!r})
 # ValueError rather than RuntimeError: NotImplementedError subclasses
 # RuntimeError, so a stubbed-out discover_specs would satisfy the assertion
 # for the wrong reason and the case would pass before it was implemented.
+def spec_module_source(**fields):
+    """The source of a db_spec declaring a real AliasSpec.
+
+    The DS cases use a local stand-in instead, so discovery's cases do not
+    depend on the spec type. The CF cases need the real one, because
+    resolution reads fields off it.
+    """
+    arguments = ", ".join(f"{name}={value!r}" for name, value in fields.items())
+    return (
+        "from evennia_database_cascade import AliasSpec\n"
+        f"\nSPEC = AliasSpec({arguments})\n"
+    )
+
+
 RAISING_SPEC_MODULE = """
 raise ValueError("this db_spec is broken")
 """
@@ -215,6 +293,14 @@ class DiscoverSpecsTest(unittest.TestCase):
 
         self.assertEqual([spec.alias for spec in found], ["ds10"])
 
+    def test_an_appconfig_path_resolves_to_its_package(self):
+        """DS-12 — an entry naming an AppConfig class resolves to its package."""
+        self.apps.add("ds12_app", SPEC_MODULE.format(alias="ds12"))
+
+        found = discover_specs(["ds12_app.apps.Ds12Config"])
+
+        self.assertEqual([spec.alias for spec in found], ["ds12"])
+
     def test_an_app_that_does_not_exist_raises_its_own_error(self):
         """DS-11 — an app that cannot be imported at all raises MissingAppError."""
         with self.assertRaises(MissingAppError) as caught:
@@ -299,18 +385,7 @@ class AliasSpecTest(unittest.TestCase):
 
     def test_spec_module_imports_nothing_from_django(self):
         """SP-10 — spec.py imports nothing from Django."""
-        tree = ast.parse(pathlib.Path(spec_module.__file__).read_text())
-
-        imported = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported += [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                imported.append(node.module or "")
-
-        self.assertEqual(
-            [name for name in imported if name.split(".")[0] == "django"], []
-        )
+        self.assertEqual(django_imports(spec_module), [])
 
 
 class ValidateSpecsTest(unittest.TestCase):
@@ -399,3 +474,902 @@ class ValidateSpecsTest(unittest.TestCase):
         self.assertIn("shared", message)
         self.assertIn("nameless_app", message)
         self.assertIn("library_four", message)
+
+
+class ResolveDatabaseTest(unittest.TestCase):
+    """resolve_database — the three rungs, for one spec."""
+
+    def spec(self, **overrides):
+        """An AliasSpec, with the fields a case cares about overridden."""
+        fields = {"app_label": "fcm_xrpl", "alias": "xrpl"}
+        fields.update(overrides)
+        return AliasSpec(**fields)
+
+    def test_the_alias_own_url_is_used_when_set(self):
+        """RS-01 — DATABASE_URL_<ALIAS> set: the entry is that URL parsed."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(self.spec(), GAME_DIR, env)
+
+        self.assertEqual(entry["HOST"], "own.host")
+        self.assertEqual(entry["NAME"], "own_db")
+        self.assertIn("postgresql", entry["ENGINE"])
+
+    def test_the_common_url_is_used_when_the_alias_has_none(self):
+        """RS-02 — only the common URL set: the entry is that URL parsed."""
+        env = {"DATABASE_URL": COMMON_URL}
+
+        entry = resolve_database(self.spec(), GAME_DIR, env)
+
+        self.assertEqual(entry["HOST"], "common.host")
+        self.assertEqual(entry["NAME"], "common_db")
+
+    def test_no_url_falls_back_to_a_sqlite_file(self):
+        """RS-03 — neither set: SQLite at <game_dir>/server/<sqlite_filename>."""
+        entry = resolve_database(self.spec(), GAME_DIR, {})
+
+        self.assertEqual(entry["ENGINE"], "django.db.backends.sqlite3")
+        self.assertEqual(
+            entry["NAME"], os.path.join(GAME_DIR, "server", "xrpl.db3")
+        )
+
+    def test_the_alias_own_url_wins_over_the_common_one(self):
+        """RS-04 — both set: the alias's own URL wins."""
+        env = {"DATABASE_URL_XRPL": OWN_URL, "DATABASE_URL": COMMON_URL}
+
+        entry = resolve_database(self.spec(), GAME_DIR, env)
+
+        self.assertEqual(entry["HOST"], "own.host")
+
+    def test_the_variable_read_is_the_alias_upper_cased(self):
+        """RS-05 — ai_memory reads DATABASE_URL_AI_MEMORY."""
+        self.assertEqual(alias_url_variable("ai_memory"), "DATABASE_URL_AI_MEMORY")
+
+        env = {"DATABASE_URL_AI_MEMORY": OWN_URL}
+        entry = resolve_database(
+            self.spec(app_label="evennia_ai_memory", alias="ai_memory"),
+            GAME_DIR,
+            env,
+        )
+
+        self.assertEqual(entry["HOST"], "own.host")
+
+    def test_the_common_variable_name_comes_from_the_argument(self):
+        """RS-06 — a caller naming a different common variable is honoured."""
+        env = {"GAME_DATABASE_URL": COMMON_URL, "DATABASE_URL": OWN_URL}
+
+        entry = resolve_database(
+            self.spec(), GAME_DIR, env, common_url_var="GAME_DATABASE_URL"
+        )
+
+        self.assertEqual(entry["HOST"], "common.host")
+
+    def test_the_real_environment_is_never_consulted(self):
+        """RS-07 — only the mapping passed in is read."""
+        os.environ["DATABASE_URL_XRPL"] = OWN_URL
+        self.addCleanup(os.environ.pop, "DATABASE_URL_XRPL", None)
+
+        entry = resolve_database(self.spec(), GAME_DIR, {})
+
+        self.assertEqual(entry["ENGINE"], "django.db.backends.sqlite3")
+
+    def test_an_empty_variable_counts_as_unset(self):
+        """RS-08 — a variable set to an empty string falls through."""
+        env = {"DATABASE_URL_XRPL": "", "DATABASE_URL": COMMON_URL}
+
+        entry = resolve_database(self.spec(), GAME_DIR, env)
+
+        self.assertEqual(entry["HOST"], "common.host")
+
+        entry = resolve_database(self.spec(), GAME_DIR, {"DATABASE_URL": ""})
+
+        self.assertEqual(entry["ENGINE"], "django.db.backends.sqlite3")
+
+    def test_a_spec_refusing_the_common_db_raises_on_that_rung(self):
+        """RS-09 — allow_sharing_common_db=False and only the common URL set."""
+        env = {"DATABASE_URL": COMMON_URL}
+
+        with self.assertRaises(SharedDatabaseRefused) as caught:
+            resolve_database(
+                self.spec(alias="archive", allow_sharing_common_db=False),
+                GAME_DIR,
+                env,
+            )
+
+        message = str(caught.exception)
+        self.assertIn("archive", message)
+        self.assertIn("DATABASE_URL_ARCHIVE", message)
+
+    def test_a_spec_refusing_the_common_db_accepts_its_own_url(self):
+        """RS-10 — allow_sharing_common_db=False with its own URL resolves."""
+        env = {"DATABASE_URL_ARCHIVE": OWN_URL, "DATABASE_URL": COMMON_URL}
+
+        entry = resolve_database(
+            self.spec(alias="archive", allow_sharing_common_db=False),
+            GAME_DIR,
+            env,
+        )
+
+        self.assertEqual(entry["HOST"], "own.host")
+
+    def test_a_spec_refusing_the_common_db_still_falls_back_to_sqlite(self):
+        """RS-11 — allow_sharing_common_db=False with neither set is fine."""
+        entry = resolve_database(
+            self.spec(alias="archive", allow_sharing_common_db=False),
+            GAME_DIR,
+            {},
+        )
+
+        self.assertEqual(
+            entry["NAME"], os.path.join(GAME_DIR, "server", "archive.db3")
+        )
+
+    def test_the_sqlite_entry_uses_the_declared_filename(self):
+        """RS-12 — an explicit sqlite_filename is the file used."""
+        entry = resolve_database(
+            self.spec(sqlite_filename="ledger.db3"), GAME_DIR, {}
+        )
+
+        self.assertEqual(
+            entry["NAME"], os.path.join(GAME_DIR, "server", "ledger.db3")
+        )
+
+
+class IsSplitTest(unittest.TestCase):
+    """is_split and split_aliases — which aliases are on a database of their own."""
+
+    def test_an_alias_with_its_own_url_is_split(self):
+        """SL-01 — the alias's own URL is set: split."""
+        self.assertTrue(is_split("xrpl", {"DATABASE_URL_XRPL": OWN_URL}))
+
+    def test_an_alias_on_only_the_common_url_is_not_split(self):
+        """SL-02 — only the common URL is set: not split."""
+        self.assertFalse(is_split("xrpl", {"DATABASE_URL": COMMON_URL}))
+
+    def test_an_alias_with_no_urls_at_all_is_split(self):
+        """SL-03 — neither set: split, because each alias is its own file."""
+        self.assertTrue(is_split("xrpl", {}))
+
+    def test_an_alias_with_both_urls_is_split(self):
+        """SL-04 — both set: split."""
+        env = {"DATABASE_URL_XRPL": OWN_URL, "DATABASE_URL": COMMON_URL}
+
+        self.assertTrue(is_split("xrpl", env))
+
+    def test_the_common_variable_name_comes_from_the_argument(self):
+        """SL-05 — a caller naming a different common variable is honoured."""
+        env = {"GAME_DATABASE_URL": COMMON_URL}
+
+        self.assertFalse(is_split("xrpl", env, common_url_var="GAME_DATABASE_URL"))
+        self.assertTrue(is_split("xrpl", env))
+
+    def test_an_empty_variable_counts_as_unset(self):
+        """SL-06 — an empty string counts as unset, in either position."""
+        self.assertTrue(is_split("xrpl", {"DATABASE_URL": ""}))
+        self.assertFalse(
+            is_split("xrpl", {"DATABASE_URL_XRPL": "", "DATABASE_URL": COMMON_URL})
+        )
+
+    def test_the_real_environment_is_never_consulted(self):
+        """SL-07 — only the mapping passed in is read."""
+        os.environ["DATABASE_URL"] = COMMON_URL
+        self.addCleanup(os.environ.pop, "DATABASE_URL", None)
+
+        self.assertTrue(is_split("xrpl", {}))
+
+    def test_split_aliases_returns_the_split_subset_in_order(self):
+        """SL-08 — split_aliases returns the split aliases, in spec order."""
+        specs = [
+            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
+            AliasSpec(app_label="evennia_archive", alias="archive"),
+        ]
+        env = {
+            "DATABASE_URL": COMMON_URL,
+            "DATABASE_URL_ARCHIVE": OWN_URL,
+            "DATABASE_URL_XRPL": OWN_URL,
+        }
+
+        self.assertEqual(split_aliases(specs, env), ["xrpl", "archive"])
+
+    def test_split_aliases_returns_nothing_when_all_share(self):
+        """SL-09 — no spec split: an empty list."""
+        specs = [
+            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
+        ]
+
+        self.assertEqual(split_aliases(specs, {"DATABASE_URL": COMMON_URL}), [])
+
+    def test_split_aliases_returns_all_of_them_on_sqlite(self):
+        """SL-10 — every spec split: every alias, none omitted."""
+        specs = [
+            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
+        ]
+
+        self.assertEqual(split_aliases(specs, {}), ["xrpl", "ai_memory"])
+
+
+class CascadeRouterTest(unittest.TestCase):
+    """CascadeRouter — one parameterised router, built from a spec."""
+
+    def router(self, **overrides):
+        """A router over an AliasSpec, with the fields a case cares about set."""
+        fields = {"app_label": "fcm_xrpl", "alias": "xrpl"}
+        fields.update(overrides)
+        return CascadeRouter(AliasSpec(**fields))
+
+    def test_reads_of_our_models_go_to_our_alias(self):
+        """RT-01 — db_for_read returns the alias for a model of its own app."""
+        self.assertEqual(self.router().db_for_read(model("fcm_xrpl")), "xrpl")
+
+    def test_writes_of_our_models_go_to_our_alias(self):
+        """RT-02 — db_for_write returns the alias for a model of its own app."""
+        self.assertEqual(self.router().db_for_write(model("fcm_xrpl")), "xrpl")
+
+    def test_a_foreign_model_gets_no_answer(self):
+        """RT-03 — both return None for a foreign model."""
+        router = self.router()
+        foreign = model("evennia_archive")
+
+        self.assertIsNone(router.db_for_read(foreign))
+        self.assertIsNone(router.db_for_write(foreign))
+
+    def test_our_app_may_migrate_onto_our_alias(self):
+        """RT-04 — allow_migrate is True for its own app on its own alias."""
+        self.assertIs(self.router().allow_migrate("xrpl", "fcm_xrpl"), True)
+
+    def test_our_app_may_not_migrate_anywhere_else(self):
+        """RT-05 — allow_migrate is False for its own app on any other alias."""
+        router = self.router()
+
+        self.assertIs(router.allow_migrate("default", "fcm_xrpl"), False)
+        self.assertIs(router.allow_migrate("archive", "fcm_xrpl"), False)
+
+    def test_a_foreign_app_is_refused_our_alias_by_default(self):
+        """RT-06 — allow_foreign_tables_in_own_db=False refuses a foreign app."""
+        router = self.router()
+
+        self.assertIs(router.allow_migrate("xrpl", "evennia_archive"), False)
+
+    def test_a_foreign_app_may_join_us_when_the_spec_allows_it(self):
+        """RT-07 — allow_foreign_tables_in_own_db=True defers instead."""
+        router = self.router(
+            app_label="evennia_archive",
+            alias="archive",
+            allow_foreign_tables_in_own_db=True,
+        )
+
+        self.assertIsNone(router.allow_migrate("archive", "objects"))
+
+    def test_a_foreign_app_on_a_foreign_alias_gets_no_opinion(self):
+        """RT-08 — allow_migrate is None for a foreign app on a foreign alias."""
+        self.assertIsNone(self.router().allow_migrate("archive", "evennia_archive"))
+
+    def test_a_relation_between_two_of_ours_is_allowed(self):
+        """RT-09 — allow_relation is True when both models are its own."""
+        router = self.router()
+
+        self.assertIs(
+            router.allow_relation(model("fcm_xrpl"), model("fcm_xrpl")), True
+        )
+
+    def test_a_relation_touching_a_foreign_model_gets_no_opinion(self):
+        """RT-10 — allow_relation is None whether one or both are foreign."""
+        router = self.router()
+        ours = model("fcm_xrpl")
+        theirs = model("evennia_archive")
+
+        self.assertIsNone(router.allow_relation(ours, theirs))
+        self.assertIsNone(router.allow_relation(theirs, ours))
+        self.assertIsNone(router.allow_relation(theirs, theirs))
+
+    def test_two_routers_each_answer_only_for_their_own_app(self):
+        """RT-11 — the co-installed case: neither captures the other's models."""
+        xrpl = self.router()
+        archive = self.router(app_label="evennia_archive", alias="archive")
+
+        self.assertEqual(xrpl.db_for_read(model("fcm_xrpl")), "xrpl")
+        self.assertIsNone(archive.db_for_read(model("fcm_xrpl")))
+        self.assertEqual(archive.db_for_read(model("evennia_archive")), "archive")
+        self.assertIsNone(xrpl.db_for_read(model("evennia_archive")))
+
+    def test_the_app_label_and_the_alias_are_read_separately(self):
+        """RT-12 — routes on the app label, returns the alias."""
+        router = self.router(app_label="evennia_archive", alias="archive")
+
+        self.assertEqual(router.db_for_read(model("evennia_archive")), "archive")
+        self.assertIsNone(router.db_for_read(model("archive")))
+
+    def test_router_module_imports_nothing_from_django(self):
+        """RT-13 — router.py imports nothing from Django."""
+        self.assertEqual(django_imports(router_module), [])
+
+
+class ConfigureTest(unittest.TestCase):
+    """configure — the one call a consumer makes."""
+
+    def setUp(self):
+        self.apps = AppTree()
+        self.addCleanup(self.apps.teardown)
+
+    def game_databases(self, name="evennia.db3"):
+        """A consumer's DATABASES, with the game on SQLite.
+
+        Not called ``databases``: Django's test runner reads a
+        ``databases`` attribute off every TestCase to decide which databases
+        to set up, and a method there breaks collection for the whole suite.
+        """
+        return {
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": os.path.join(GAME_DIR, "server", name),
+            }
+        }
+
+    def app(self, name, **fields):
+        """An app declaring a real AliasSpec."""
+        return self.apps.add(name, spec_module_source(**fields))
+
+    def test_every_discovered_spec_gets_an_entry(self):
+        """CF-01 — returns DATABASES carrying an entry per discovered spec."""
+        apps = [
+            self.app("cf01_xrpl", app_label="cf01_xrpl", alias="xrpl"),
+            self.app("cf01_bus", app_label="cf01_bus", alias="messagebus"),
+        ]
+
+        databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
+
+        self.assertIn("xrpl", databases)
+        self.assertIn("messagebus", databases)
+
+    def test_the_default_entry_is_left_alone(self):
+        """CF-02 — the default entry is exactly as it was given."""
+        given = self.game_databases()
+        apps = [self.app("cf02_app", app_label="cf02_app", alias="xrpl")]
+
+        databases, _ = configure(given, apps, GAME_DIR, {})
+
+        self.assertEqual(databases["default"], given["default"])
+
+    def test_routers_are_built_for_exactly_the_split_aliases(self):
+        """CF-03 — routers for the split aliases, and none for the rest."""
+        apps = [
+            self.app("cf03_xrpl", app_label="cf03_xrpl", alias="xrpl"),
+            self.app("cf03_bus", app_label="cf03_bus", alias="messagebus"),
+        ]
+        env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_XRPL": OWN_URL}
+
+        _, routers = configure(self.game_databases(), apps, GAME_DIR, env)
+
+        self.assertEqual([router.spec.alias for router in routers], ["xrpl"])
+
+    def test_nothing_split_means_no_routers(self):
+        """CF-04 — no alias split: an empty router list."""
+        apps = [self.app("cf04_app", app_label="cf04_app", alias="xrpl")]
+
+        _, routers = configure(
+            self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
+        )
+
+        self.assertEqual(routers, [])
+
+    def test_everything_split_means_a_router_each_in_spec_order(self):
+        """CF-05 — every alias split: one router each, in spec order."""
+        apps = [
+            self.app("cf05_bus", app_label="cf05_bus", alias="messagebus"),
+            self.app("cf05_xrpl", app_label="cf05_xrpl", alias="xrpl"),
+        ]
+
+        _, routers = configure(self.game_databases(), apps, GAME_DIR, {})
+
+        self.assertEqual(
+            [router.spec.alias for router in routers], ["messagebus", "xrpl"]
+        )
+
+    def test_no_specs_changes_nothing(self):
+        """CF-06 — no specs discovered: databases unchanged, no routers."""
+        self.apps.add("cf06_bare")
+        given = self.game_databases()
+
+        databases, routers = configure(given, ["cf06_bare"], GAME_DIR, {})
+
+        self.assertEqual(databases, given)
+        self.assertEqual(routers, [])
+
+    def test_the_databases_argument_is_not_mutated(self):
+        """CF-07 — the dict it was handed is not mutated."""
+        given = self.game_databases()
+        apps = [self.app("cf07_app", app_label="cf07_app", alias="xrpl")]
+
+        configure(given, apps, GAME_DIR, {})
+
+        self.assertEqual(list(given), ["default"])
+
+    def test_the_routers_are_instances_carrying_their_spec(self):
+        """CF-08 — routers are CascadeRouter instances, not dotted paths."""
+        apps = [self.app("cf08_app", app_label="cf08_app", alias="xrpl")]
+
+        _, routers = configure(self.game_databases(), apps, GAME_DIR, {})
+
+        self.assertIsInstance(routers[0], CascadeRouter)
+        self.assertEqual(routers[0].spec.app_label, "cf08_app")
+
+    def test_an_invalid_spec_set_is_refused(self):
+        """CF-09 — validate_specs is reached rather than skipped."""
+        apps = [
+            self.app("cf09_one", app_label="cf09_one", alias="shared"),
+            self.app("cf09_two", app_label="cf09_two", alias="shared"),
+        ]
+
+        with self.assertRaises(SpecValidationError):
+            configure(self.game_databases(), apps, GAME_DIR, {})
+
+    def test_a_broken_db_spec_propagates(self):
+        """CF-10 — discover_specs' errors propagate unchanged."""
+        self.apps.add("cf10_app", BROKEN_IMPORT_SPEC_MODULE)
+
+        with self.assertRaises(SpecImportError):
+            configure(self.game_databases(), ["cf10_app"], GAME_DIR, {})
+
+    def test_the_common_variable_name_reaches_both_steps(self):
+        """CF-11 — common_url_var reaches resolution and the split decision."""
+        apps = [self.app("cf11_app", app_label="cf11_app", alias="xrpl")]
+        env = {"GAME_DATABASE_URL": COMMON_URL}
+
+        databases, routers = configure(
+            self.game_databases(),
+            apps,
+            GAME_DIR,
+            env,
+            common_url_var="GAME_DATABASE_URL",
+        )
+
+        self.assertEqual(databases["xrpl"]["HOST"], "common.host")
+        self.assertEqual(routers, [])
+
+    def test_an_alias_landing_on_the_game_database_file_is_refused(self):
+        """CF-12 — a SQLite path matching default's NAME raises."""
+        apps = [
+            self.app(
+                "cf12_app",
+                app_label="cf12_app",
+                alias="xrpl",
+                sqlite_filename="evennia.db3",
+            )
+        ]
+
+        with self.assertRaises(GameDatabaseCollision) as caught:
+            configure(self.game_databases(), apps, GAME_DIR, {})
+
+        message = str(caught.exception)
+        self.assertIn("xrpl", message)
+        self.assertIn("evennia.db3", message)
+
+    def test_a_postgres_default_alongside_sqlite_is_not_a_collision(self):
+        """CF-13 — the check fires only where default is SQLite."""
+        given = {
+            "default": {
+                "ENGINE": "django.db.backends.postgresql",
+                "NAME": "evennia.db3",
+                "HOST": "common.host",
+            }
+        }
+        apps = [
+            self.app(
+                "cf13_app",
+                app_label="cf13_app",
+                alias="xrpl",
+                sqlite_filename="evennia.db3",
+            )
+        ]
+
+        databases, _ = configure(given, apps, GAME_DIR, {})
+
+        self.assertEqual(databases["xrpl"]["ENGINE"], "django.db.backends.sqlite3")
+
+
+class CheckSettingsTest(unittest.TestCase):
+    """check_settings — the boot check, in AppConfig.ready()."""
+
+    def setUp(self):
+        self.apps = AppTree()
+        self.addCleanup(self.apps.teardown)
+        self.distributions = {}
+        self.requirements = {}
+        self.logged = []
+
+        patches = [
+            mock.patch.object(
+                config_module,
+                "packages_distributions",
+                lambda: dict(self.distributions),
+            ),
+            mock.patch.object(
+                config_module,
+                "requires",
+                lambda name: self.requirements.get(name),
+            ),
+            mock.patch.object(
+                config_module,
+                "cascade_log",
+                lambda message, **kwargs: self.logged.append(message),
+            ),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def app(self, name, requires_us=None, **spec_fields):
+        """An app, optionally shipping a spec and declaring a dependency.
+
+        ``requires_us`` is the requirement string its distribution declares,
+        or None for a distribution that does not depend on this library.
+        """
+        source = spec_module_source(**spec_fields) if spec_fields else None
+        self.apps.add(name, source)
+        if requires_us is not None:
+            distribution = name.replace("_", "-")
+            self.distributions[name.split(".")[0]] = [distribution]
+            self.requirements[distribution] = [requires_us]
+        return name
+
+    def databases_with(self, *aliases):
+        """A DATABASES dict carrying default and the named aliases."""
+        entry = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+        return {alias: dict(entry) for alias in ("default",) + aliases}
+
+    def test_a_dependent_app_declaring_a_spec_passes(self):
+        """BC-01 — requires the library and has a db_spec: passes."""
+        app = self.app(
+            "bc01_app",
+            requires_us="evennia-database-cascade",
+            app_label="bc01_app",
+            alias="xrpl",
+        )
+
+        self.assertIsNone(check_settings([app], self.databases_with("xrpl")))
+
+    def test_a_dependent_app_with_no_spec_is_refused(self):
+        """BC-02 — requires the library and has no db_spec: raises."""
+        app = self.app("bc02_app", requires_us="evennia-database-cascade")
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings([app], self.databases_with())
+
+        message = str(caught.exception)
+        self.assertIn("bc02_app", message)
+        self.assertIn("db_spec", message)
+
+    def test_an_optional_dependency_is_skipped(self):
+        """BC-03 — a requirement carrying an extra marker is skipped."""
+        app = self.app(
+            "bc03_app",
+            requires_us='evennia-database-cascade; extra == "postgres"',
+        )
+
+        self.assertIsNone(check_settings([app], self.databases_with()))
+
+    def test_an_app_not_depending_on_us_is_ignored(self):
+        """BC-04 — a distribution that does not require us is ignored."""
+        app = self.app("bc04_app", requires_us="some-other-library>=2")
+
+        self.assertIsNone(check_settings([app], self.databases_with()))
+
+    def test_an_app_with_no_distribution_is_ignored(self):
+        """BC-05 — a gamedir module has no metadata to read."""
+        app = self.app("bc05_world")
+
+        self.assertIsNone(check_settings([app], self.databases_with()))
+
+    def test_a_declared_alias_present_in_databases_passes(self):
+        """BC-06 — every app with a db_spec has its alias in DATABASES."""
+        app = self.app("bc06_app", app_label="bc06_app", alias="xrpl")
+
+        self.assertIsNone(check_settings([app], self.databases_with("xrpl")))
+
+    def test_a_declared_alias_missing_from_databases_is_refused(self):
+        """BC-07 — an alias absent from DATABASES raises, naming both."""
+        app = self.app("bc07_app", app_label="bc07_app", alias="xrpl")
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings([app], self.databases_with())
+
+        message = str(caught.exception)
+        self.assertIn("bc07_app", message)
+        self.assertIn("xrpl", message)
+
+    def test_two_missing_aliases_are_reported_together(self):
+        """BC-08 — two such apps: one raise, naming both."""
+        apps = [
+            self.app("bc08_one", app_label="bc08_one", alias="xrpl"),
+            self.app("bc08_two", app_label="bc08_two", alias="messagebus"),
+        ]
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings(apps, self.databases_with())
+
+        message = str(caught.exception)
+        self.assertIn("xrpl", message)
+        self.assertIn("messagebus", message)
+
+    def test_both_kinds_of_problem_are_reported_together(self):
+        """BC-09 — both kinds at once: one raise, naming all of them."""
+        apps = [
+            self.app("bc09_silent", requires_us="evennia-database-cascade"),
+            self.app("bc09_absent", app_label="bc09_absent", alias="xrpl"),
+        ]
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings(apps, self.databases_with())
+
+        message = str(caught.exception)
+        self.assertIn("bc09_silent", message)
+        self.assertIn("xrpl", message)
+
+    def test_a_clean_run_logs_one_line(self):
+        """BC-10 — a clean run logs the cascade having run."""
+        app = self.app("bc10_app", app_label="bc10_app", alias="xrpl")
+
+        check_settings([app], self.databases_with("xrpl"))
+
+        self.assertEqual(len(self.logged), 1)
+        self.assertIn("1", self.logged[0])
+
+    def test_a_refusal_is_logged_before_it_is_raised(self):
+        """BC-11 — a refusal reaches the log as well as the caller."""
+        app = self.app("bc11_app", app_label="bc11_app", alias="xrpl")
+
+        with self.assertRaises(ImproperlyConfigured):
+            check_settings([app], self.databases_with())
+
+        self.assertTrue(any("xrpl" in line for line in self.logged))
+
+    def test_ready_calls_the_check(self):
+        """BC-12 — ready() calls check_settings, so it cannot go unrun."""
+        from evennia_database_cascade import apps as apps_module
+
+        with mock.patch.object(config_module, "check_settings") as checked:
+            apps_module.CascadeConfig.ready(mock.Mock())
+
+        checked.assert_called_once_with()
+
+
+class MigrateAllTest(unittest.TestCase):
+    """migrate_all — reaching every split alias."""
+
+    def setUp(self):
+        self.apps = AppTree()
+        self.addCleanup(self.apps.teardown)
+        self.calls = []
+        self.logged = []
+
+        def record(*args, **options):
+            self.calls.append((args, options))
+
+        patches = [
+            mock.patch.object(migrate_module, "call_command", record),
+            mock.patch.object(
+                migrate_module,
+                "cascade_log",
+                lambda message, **kwargs: self.logged.append(message),
+            ),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def app(self, name, **spec_fields):
+        """An app declaring a real AliasSpec."""
+        return self.apps.add(name, spec_module_source(**spec_fields))
+
+    def aliases_migrated(self):
+        """The alias given to each `migrate --database` call, in order."""
+        return [
+            options["database"]
+            for _, options in self.calls
+            if "database" in options
+        ]
+
+    def test_the_bare_migrate_runs_first(self):
+        """MG-01 — runs a bare migrate before anything else."""
+        app = self.app("mg01_app", app_label="mg01_app", alias="xrpl")
+
+        migrate_all([app], {})
+
+        self.assertEqual(self.calls[0], (("migrate",), {}))
+
+    def test_each_split_alias_gets_its_own_call_in_spec_order(self):
+        """MG-02 — one migrate --database per split alias, in spec order."""
+        apps = [
+            self.app("mg02_bus", app_label="mg02_bus", alias="messagebus"),
+            self.app("mg02_xrpl", app_label="mg02_xrpl", alias="xrpl"),
+        ]
+
+        migrate_all(apps, {})
+
+        self.assertEqual(self.aliases_migrated(), ["messagebus", "xrpl"])
+
+    def test_nothing_split_means_the_bare_call_only(self):
+        """MG-03 — no split aliases: the bare call and nothing else."""
+        app = self.app("mg03_app", app_label="mg03_app", alias="xrpl")
+
+        migrate_all([app], {"DATABASE_URL": COMMON_URL})
+
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.aliases_migrated(), [])
+
+    def test_the_split_set_comes_from_split_aliases(self):
+        """MG-04 — the split set is split_aliases' answer, not a second rule."""
+        app = self.app("mg04_app", app_label="mg04_app", alias="xrpl")
+
+        with mock.patch.object(
+            migrate_module, "split_aliases", return_value=[]
+        ) as derived:
+            migrate_all([app], {})
+
+        derived.assert_called_once()
+        self.assertEqual(self.aliases_migrated(), [])
+
+    def test_an_unsplit_alias_never_gets_its_own_call(self):
+        """MG-05 — the bare migrate already covered it."""
+        apps = [
+            self.app("mg05_shared", app_label="mg05_shared", alias="shared"),
+            self.app("mg05_own", app_label="mg05_own", alias="own"),
+        ]
+        env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_OWN": OWN_URL}
+
+        migrate_all(apps, env)
+
+        self.assertEqual(self.aliases_migrated(), ["own"])
+
+    def test_a_failing_migrate_propagates_and_is_logged(self):
+        """MG-06 — the failure reaches the log and then the caller."""
+        app = self.app("mg06_app", app_label="mg06_app", alias="xrpl")
+
+        # ValueError, not RuntimeError: NotImplementedError subclasses
+        # RuntimeError, so a stubbed migrate_all would satisfy the assertion
+        # for the wrong reason.
+        def boom(*args, **options):
+            raise ValueError("migrate blew up")
+
+        with mock.patch.object(migrate_module, "call_command", boom):
+            with self.assertRaises(ValueError):
+                migrate_all([app], {})
+
+        self.assertTrue(any("migrate blew up" in line for line in self.logged))
+
+    def test_a_clean_run_logs_what_it_migrated(self):
+        """MG-07 — one line naming what was migrated."""
+        app = self.app("mg07_app", app_label="mg07_app", alias="xrpl")
+
+        migrate_all([app], {})
+
+        self.assertEqual(len(self.logged), 1)
+        self.assertIn("xrpl", self.logged[0])
+
+    def test_the_common_variable_comes_from_the_setting(self):
+        """MG-08 — CASCADE_COMMON_URL_VAR, defaulting to DATABASE_URL."""
+        self.assertEqual(get_common_url_var(), "DATABASE_URL")
+
+        with mock.patch.object(
+            migrate_module, "get_common_url_var", lambda: "GAME_DATABASE_URL"
+        ):
+            app = self.app("mg08_app", app_label="mg08_app", alias="xrpl")
+            migrate_all([app], {"GAME_DATABASE_URL": COMMON_URL})
+
+        self.assertEqual(self.aliases_migrated(), [])
+
+    def test_the_command_calls_migrate_all(self):
+        """MG-09 — the management command is a wrapper, not a second path."""
+        from evennia_database_cascade.management.commands import cascade_migrate
+
+        with mock.patch.object(
+            cascade_migrate, "migrate_all", return_value=["xrpl"]
+        ) as called:
+            cascade_migrate.Command().handle(verbosity=2)
+
+        called.assert_called_once_with(verbosity=2)
+
+    def test_options_are_forwarded_and_database_is_refused(self):
+        """MG-10 — options pass through; a caller-supplied database raises."""
+        app = self.app("mg10_app", app_label="mg10_app", alias="xrpl")
+
+        migrate_all([app], {}, verbosity=2, interactive=False)
+
+        self.assertEqual(self.calls[0][1], {"verbosity": 2, "interactive": False})
+
+        with self.assertRaises(TypeError):
+            migrate_all([app], {}, database="xrpl")
+
+
+class LogShimTest(unittest.TestCase):
+    """cascade_log — the logging shim.
+
+    The shim is copied verbatim across the libraries, so these cases are the
+    same shape as theirs. Evennia's logger is faked through sys.modules
+    because the shim imports it lazily, inside the call.
+    """
+
+    def capture(self):
+        """A fake Evennia logger recording every log_file call."""
+        fake = mock.Mock()
+        fake.log_file = mock.Mock()
+        return fake
+
+    def logging_as(self, fake):
+        """Run with our fake standing in for evennia.utils.logger."""
+        return mock.patch.dict(
+            "sys.modules", {"evennia.utils": mock.Mock(logger=fake)}
+        )
+
+    def test_it_writes_to_the_library_log_file(self):
+        """LG-01 — the call reaches log_file with cascade.log."""
+        fake = self.capture()
+
+        with self.logging_as(fake):
+            cascade_log("resolved four aliases")
+
+        fake.log_file.assert_called_once_with(
+            "[INFO] resolved four aliases", filename="cascade.log"
+        )
+
+    def test_the_level_prefixes_the_message(self):
+        """LG-02 — the level is written as [LEVEL] message."""
+        fake = self.capture()
+
+        with self.logging_as(fake):
+            cascade_log("migrate failed", level="ERROR")
+
+        fake.log_file.assert_called_once_with(
+            "[ERROR] migrate failed", filename="cascade.log"
+        )
+
+    def test_an_unknown_level_coerces_to_info(self):
+        """LG-03 — an unknown level degrades rather than raising."""
+        fake = self.capture()
+
+        with self.logging_as(fake):
+            cascade_log("something", level="CRITICAL")
+
+        fake.log_file.assert_called_once_with(
+            "[INFO] something", filename="cascade.log"
+        )
+
+    def test_it_is_a_silent_noop_without_evennia(self):
+        """LG-04 — outside an Evennia engine the call does nothing at all."""
+        real_import = __import__
+
+        def refuse_evennia(name, *args, **kwargs):
+            if name == "evennia.utils":
+                raise ImportError("no evennia here")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=refuse_evennia):
+            self.assertIsNone(cascade_log("nobody hears this"))
+
+    def test_trace_inside_an_except_block_appends_the_traceback(self):
+        """LG-05 — trace=True carries the active exception."""
+        fake = self.capture()
+
+        with self.logging_as(fake):
+            try:
+                raise ValueError("the original problem")
+            except ValueError:
+                cascade_log("migrate failed", level="ERROR", trace=True)
+
+        written = fake.log_file.call_args[0][0]
+        self.assertIn("[ERROR] migrate failed", written)
+        self.assertIn("the original problem", written)
+
+    def test_trace_outside_an_except_block_adds_nothing(self):
+        """LG-06 — no NoneType: None noise where there is no exception."""
+        fake = self.capture()
+
+        with self.logging_as(fake):
+            cascade_log("no exception here", trace=True)
+
+        fake.log_file.assert_called_once_with(
+            "[INFO] no exception here", filename="cascade.log"
+        )

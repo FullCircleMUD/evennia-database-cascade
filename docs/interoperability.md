@@ -12,10 +12,9 @@ The coupling runs the opposite way from usual: siblings depend on this library, 
 imports none of them. The dividing line throughout is whether a sibling owns tables — one with no
 models has nothing for this library to place.
 
-**Three units are built** — `discover_specs`, `AliasSpec` and `validate_specs`. The resolver, the
-router and `configure()` are not, so every statement below about what a sibling *would* do on
-adopting this library is design rather than description, and should be re-confirmed when there is an
-implementation to check.
+**Everything is built and nothing is adopted.** No sibling depends on this library yet, so every
+statement below about what one *would* do on adopting it is design rather than description, and
+should be re-confirmed at the point it actually happens.
 
 Each section names the relationship — **hard dependency**, **optional integration**, or **no
 coupling** — followed either by the constraints that apply or by an explicit clearance stating *why*
@@ -57,6 +56,15 @@ constraint itself is archive's and is documented in
 
 Archive's `CLAUDE.md` records its missing `archive_database()` helper as a deliberate deferral
 pending this library, rather than an oversight — so the helper should not be written there.
+
+## evennia-calendar
+
+**No coupling anticipated.** Neither library imports the other. Calendar is at scaffold stage with no
+library code, and turns Evennia's game time into a date — it owns no models, so it has nothing for
+this library to place.
+
+`[TBD — confirm once calendar has code: whether it stores anything of its own. A calendar that only
+computes from `gametime` stays clear of this library entirely.]`
 
 ## evennia-database-cascade
 

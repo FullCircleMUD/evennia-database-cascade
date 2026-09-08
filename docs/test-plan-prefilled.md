@@ -44,23 +44,13 @@ lacks it for `LG-04`.
 
 ## RS — `resolve_database(alias, sqlite_filename, game_dir, env)`
 
-| ID | Case | Test function |
-|---|---|---|
-| RS-01 | `DATABASE_URL_<ALIAS>` set — the entry is that URL parsed | |
-| RS-02 | Only `DATABASE_URL` set — the entry is that URL parsed | |
-| RS-03 | Neither set — a SQLite entry at `<game_dir>/server/<sqlite_filename>` | |
-| RS-04 | Both set — the alias's own URL wins | |
-| RS-05 | The variable read is the alias upper-cased: `ai_memory` reads `DATABASE_URL_AI_MEMORY` | |
-| RS-06 | Only the mapping passed in is read; the real environment is never consulted | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## SL — the split rule
 
-| ID | Case | Test function |
-|---|---|---|
-| SL-01 | The alias's own URL is set — split | |
-| SL-02 | Only `DATABASE_URL` is set — not split | |
-| SL-03 | Neither is set — split, because each alias is its own SQLite file | |
-| SL-04 | `default` is never in the split set | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## SP — `AliasSpec`
 
@@ -76,46 +66,23 @@ Validation moved to `validate_specs`, which has its own `VS` section in the real
 
 ## CF — `configure(databases, game_dir, env)`
 
-| ID | Case | Test function |
-|---|---|---|
-| CF-01 | Returns `DATABASES` carrying an entry per discovered spec | |
-| CF-02 | Leaves the `default` entry exactly as the consumer set it | |
-| CF-03 | Returns `DATABASE_ROUTERS` holding a router for each split alias and no others | |
-| CF-04 | No alias split — the router list is empty | |
-| CF-05 | Every alias split — one router each, in spec order | |
-| CF-06 | Returns the split alias list, so the migrate step reads it rather than recomputing it | |
-| CF-07 | Called with no specs discovered — returns the databases it was given, unchanged, and an empty router list | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## RT — the router
 
-| ID | Case | Test function |
-|---|---|---|
-| RT-01 | `db_for_read` returns the alias for a model of its own app | |
-| RT-02 | `db_for_read` and `db_for_write` return `None` for a foreign model | |
-| RT-03 | `allow_migrate` is `True` for its own app on its own alias | |
-| RT-04 | `allow_migrate` is `False` for its own app on any other alias | |
-| RT-05 | `exclusive=True` — `allow_migrate` is `False` for a foreign app on its alias | |
-| RT-06 | `exclusive=False` — `allow_migrate` returns `None` for a foreign app, so other apps may migrate in | |
-| RT-07 | `allow_relation` is `True` only when both models are its own, and `None` otherwise | |
-| RT-08 | Two routers built from different specs each answer only for their own app | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## MG — the migrate helper
 
-| ID | Case | Test function |
-|---|---|---|
-| MG-01 | Runs a bare `migrate` first | |
-| MG-02 | Then one `migrate --database <alias>` per split alias | |
-| MG-03 | No split aliases — the bare call and nothing else | |
-| MG-04 | The split list is the one `configure()` produced, not a second derivation | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## BC — the boot cross-check
 
-| ID | Case | Test function |
-|---|---|---|
-| BC-01 | Every app carrying a `db_spec` has its alias in `settings.DATABASES` — passes silently | |
-| BC-02 | An app carrying a `db_spec` whose alias is absent — raises `ImproperlyConfigured` naming the app and the alias | |
-| BC-03 | Two such apps — one raise, naming both | |
-| BC-04 | An app absent from `INSTALLED_APPS` is invisible to the check — the documented gap, pinned so it is not later read as a bug | |
+**Transferred to [test-plan.md](test-plan.md)** on 2026-09-08, reworked in discussion.
+
 
 ## LG — the logging shim
 
@@ -135,13 +102,11 @@ Not attached to a case, because the behaviour has not been agreed. Each becomes 
 - **Is the alias fixed by the declaring library, or overridable by the consumer?** Fixed keeps the
   environment variable name predictable. Overridable is what two libraries choosing the same alias
   would need — and decides whether a collision is refused, and by whom.
-- **How does a spec say the middle rung does not apply to it?** `evennia-archive` clones Evennia's
-  schema, so sharing the game's database hands it the live tables rather than a second set of its
-  own. Its cascade is two rungs. A spec with no way to declare that would resolve it silently onto
-  the game's database.
-- **Does `configure()` also resolve `default`?** `CF-02` says it does not, which is the conservative
-  reading. FCM's own settings resolves `default` from a bare `DATABASE_URL` before doing anything
-  else, so if that moves in here the case changes.
+- ~~**How does a spec say the middle rung does not apply to it?**~~ Settled: `allow_sharing_common_db`,
+  refusing that rung rather than falling through to SQLite. Cases `RS-09` to `RS-11`.
+- ~~**Does `configure()` also resolve `default`?**~~ Settled: it does not. `default` is the one entry
+  Evennia already provides, and owning it would mean owning an edge case that is not this library's.
+  Case `CF-02`.
 - **Does a spec carry connection knobs?** `CONN_MAX_AGE` and the Postgres session options were agreed
   to be configurable rather than constants, with `fcm-xrpl`'s `XRPL_CONN_MAX_AGE` as the precedent.
   Whether they sit on the spec, and what the defaults are, is not settled.

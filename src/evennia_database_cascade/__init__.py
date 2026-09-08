@@ -14,8 +14,9 @@ See docs/progress.md for what exists, and docs/test-plan.md for what the
 library commits to covering.
 """
 
+from .configure import configure
 from .spec import AliasSpec
 
-__all__ = ["AliasSpec"]
+__all__ = ["AliasSpec", "configure"]
 
 __version__ = "0.0.1"
