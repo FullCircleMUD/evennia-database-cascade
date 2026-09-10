@@ -21,7 +21,7 @@ from .config import (
     SQLITE_ENGINE,
 )
 from .discovery import discover_specs, validate_specs
-from .resolve import resolve_database, split_aliases
+from .resolve import apply_connection_settings, parse_url, resolve_database, split_aliases
 from .router import CascadeRouter
 
 
@@ -58,8 +58,15 @@ def configure(
     at the call site, where the consumer reassigns; a function that silently
     changes its argument is worse to test and worse to reason about.
 
-    ``default`` is not touched. It is the one entry Evennia already provides,
-    and owning it would mean owning an edge case that is not this library's.
+    **The common URL names the game's database**, so when one is set,
+    ``default`` is pointed at it along with every alias that has no URL of its
+    own. That is what makes the shared rung mean *one* database rather than
+    two. Without it the aliases move and the game does not: on Postgres the
+    game stays quietly on SQLite while its libraries are on the server, and on
+    SQLite an empty file appears that nothing will ever migrate.
+
+    With no common URL set, ``default`` is left exactly as it was given —
+    there is nothing for it to follow.
 
     Args:
         databases (dict): the consumer's ``DATABASES``, with ``default`` in
@@ -107,6 +114,20 @@ def configure(
     validate_specs(specs)
 
     resolved = dict(databases)
+
+    common_url = env.get(common_url_var) or None
+    if common_url:
+        entry = parse_url(common_url)
+        apply_connection_settings(
+            entry, default_conn_max_age, default_session_options
+        )
+        resolved["default"] = entry
+
+    # Derived before the loop, because the collision check below is only
+    # meaningful for an alias on a database of its own. One sharing the
+    # game's database is not colliding with it — that is the arrangement.
+    split = split_aliases(specs, env, common_url_var)
+
     for spec in specs:
         entry = resolve_database(
             spec,
@@ -116,10 +137,10 @@ def configure(
             default_conn_max_age,
             default_session_options,
         )
-        _refuse_the_game_database_file(spec, entry, resolved["default"])
+        if spec.alias in split:
+            _refuse_the_game_database_file(spec, entry, resolved["default"])
         resolved[spec.alias] = entry
 
-    split = split_aliases(specs, env, common_url_var)
     ours = [CascadeRouter(spec) for spec in specs if spec.alias in split]
 
     return resolved, list(routers) + ours
@@ -135,6 +156,10 @@ def _refuse_the_game_database_file(spec, entry, default_entry):
 
     Only meaningful where both are SQLite. A Postgres ``default`` has no file
     for an alias to collide with, so there is nothing to compare.
+
+    **And only for a split alias.** One sharing the game's database through
+    the common URL is meant to be there — that is the arrangement, not a
+    mistake — so the caller checks membership of the split set first.
 
     Args:
         spec (AliasSpec): the alias being placed.

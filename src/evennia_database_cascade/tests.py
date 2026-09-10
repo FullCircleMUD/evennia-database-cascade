@@ -975,7 +975,7 @@ class ConfigureTest(unittest.TestCase):
         self.assertIn("messagebus", databases)
 
     def test_the_default_entry_is_left_alone(self):
-        """CF-02 — the default entry is exactly as it was given."""
+        """CF-02 — with no common URL set, default is exactly as it was given."""
         given = self.game_databases()
         apps = [self.app("cf02_app", app_label="cf02_app", alias="xrpl")]
 
@@ -1080,7 +1080,7 @@ class ConfigureTest(unittest.TestCase):
         self.assertEqual(routers, [])
 
     def test_an_alias_landing_on_the_game_database_file_is_refused(self):
-        """CF-12 — a SQLite path matching default's NAME raises."""
+        """CF-12 — a split alias whose SQLite path matches default's NAME raises."""
         apps = [
             self.app(
                 "cf12_app",
@@ -1136,6 +1136,99 @@ class ConfigureTest(unittest.TestCase):
         )
 
         self.assertEqual(databases["one"]["CONN_MAX_AGE"], 300)
+
+    def test_a_common_url_moves_the_default_entry(self):
+        """CF-17 — default resolves to the common URL when one is set."""
+        apps = [self.app("cf17_app", app_label="cf17_app", alias="xrpl")]
+
+        databases, _ = configure(
+            self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
+        )
+
+        self.assertEqual(databases["default"]["HOST"], "common.host")
+        self.assertEqual(databases["default"]["NAME"], "common_db")
+
+    def test_the_game_and_every_quiet_alias_name_one_database(self):
+        """CF-18 — default and the quiet aliases are the same database."""
+        apps = [
+            self.app("cf18_one", app_label="cf18_one", alias="one"),
+            self.app("cf18_two", app_label="cf18_two", alias="two"),
+        ]
+
+        databases, routers = configure(
+            self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
+        )
+
+        target = (databases["default"]["ENGINE"], databases["default"]["NAME"])
+        for alias in ("one", "two"):
+            self.assertEqual(
+                (databases[alias]["ENGINE"], databases[alias]["NAME"]),
+                target,
+                msg=alias,
+            )
+        self.assertEqual(routers, [])
+
+    def test_an_alias_with_its_own_url_still_splits_off_the_common_one(self):
+        """CF-19 — default follows the common URL, that alias does not."""
+        apps = [
+            self.app("cf19_own", app_label="cf19_own", alias="own"),
+            self.app("cf19_shared", app_label="cf19_shared", alias="shared"),
+        ]
+        env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_OWN": OWN_URL}
+
+        databases, routers = configure(self.game_databases(), apps, GAME_DIR, env)
+
+        self.assertEqual(databases["default"]["HOST"], "common.host")
+        self.assertEqual(databases["shared"]["HOST"], "common.host")
+        self.assertEqual(databases["own"]["HOST"], "own.host")
+        self.assertEqual([r.spec.alias for r in routers], ["own"])
+
+    def test_the_moved_default_gets_the_same_connection_treatment(self):
+        """CF-20 — default_conn_max_age and session options reach default too."""
+        apps = [self.app("cf20_app", app_label="cf20_app", alias="xrpl")]
+
+        databases, _ = configure(
+            self.game_databases(),
+            apps,
+            GAME_DIR,
+            {"DATABASE_URL": COMMON_URL},
+            default_conn_max_age=300,
+            default_session_options={"statement_timeout": "5s"},
+        )
+
+        self.assertEqual(databases["default"]["CONN_MAX_AGE"], 300)
+        self.assertIn(
+            "-c statement_timeout=5s", databases["default"]["OPTIONS"]["options"]
+        )
+
+    def test_a_consumer_set_default_is_replaced_by_the_common_url(self):
+        """CF-21 — the common URL owns default; a hand-written one is replaced."""
+        given = {
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": "/somewhere/of/their/own.db3",
+            }
+        }
+        apps = [self.app("cf21_app", app_label="cf21_app", alias="xrpl")]
+
+        databases, _ = configure(
+            given, apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
+        )
+
+        self.assertEqual(databases["default"]["NAME"], "common_db")
+        self.assertEqual(given["default"]["NAME"], "/somewhere/of/their/own.db3")
+
+    def test_sharing_the_game_database_through_the_common_url_is_not_a_collision(self):
+        """CF-22 — an alias on the common URL is meant to be the game's database."""
+        apps = [self.app("cf22_app", app_label="cf22_app", alias="xrpl")]
+        shared = f"sqlite:///{os.path.join(GAME_DIR, 'server', 'shared.db3')}"
+
+        databases, routers = configure(
+            self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": shared}
+        )
+
+        self.assertEqual(databases["xrpl"]["NAME"], databases["default"]["NAME"])
+        self.assertEqual(routers, [])
 
     def test_a_consumers_own_routers_are_kept(self):
         """CF-16 — theirs are preserved, ours appended after."""

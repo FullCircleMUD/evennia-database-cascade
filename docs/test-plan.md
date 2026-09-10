@@ -215,13 +215,19 @@ It **copies** the databases dict rather than editing the one it was handed. Both
 call site, where the consumer reassigns; a function that silently changes its argument is worse to
 test and worse to reason about.
 
+**The common URL names the game's database.** So when one is set, `configure()` points `default` at
+it along with every alias that has no URL of its own — that is what makes rung 2 mean one database
+rather than two. Without it the aliases move and the game does not, which on Postgres leaves the game
+quietly on SQLite while its libraries are on the server, and on SQLite creates an empty file nothing
+will ever migrate. `CF-18` is the assertion that catches it.
+
 Nothing here logs. Everything in this call runs before `django.setup()`, where the shim raises — see
 principle 8 in [CLAUDE.md](../CLAUDE.md). Failures raise, and the traceback is the record.
 
 | ID | Case | Test function |
 |---|---|---|
 | CF-01 | Returns `DATABASES` carrying an entry per discovered spec | `test_every_discovered_spec_gets_an_entry` |
-| CF-02 | The `default` entry is left exactly as it was given | `test_the_default_entry_is_left_alone` |
+| CF-02 | With **no common URL set**, the `default` entry is left exactly as it was given | `test_the_default_entry_is_left_alone` |
 | CF-03 | Returns routers for exactly the split aliases, and none for the rest | `test_routers_are_built_for_exactly_the_split_aliases` |
 | CF-04 | No alias split — an empty router list | `test_nothing_split_means_no_routers` |
 | CF-05 | Every alias split — one router each, in spec order | `test_everything_split_means_a_router_each_in_spec_order` |
@@ -231,10 +237,16 @@ principle 8 in [CLAUDE.md](../CLAUDE.md). Failures raise, and the traceback is t
 | CF-09 | An invalid spec set raises — `validate_specs` is reached rather than skipped | `test_an_invalid_spec_set_is_refused` |
 | CF-10 | A broken `db_spec` raises — `discover_specs`' errors propagate unchanged | `test_a_broken_db_spec_propagates` |
 | CF-11 | `common_url_var` reaches both the resolution and the split decision | `test_the_common_variable_name_reaches_both_steps` |
-| CF-12 | An alias whose resolved SQLite path is the game's own database file raises `GameDatabaseCollision`, naming the alias and the file | `test_an_alias_landing_on_the_game_database_file_is_refused` |
+| CF-12 | A **split** alias whose resolved SQLite path is the game's own database file raises `GameDatabaseCollision`, naming the alias and the file | `test_an_alias_landing_on_the_game_database_file_is_refused` |
 | CF-13 | That check fires only where `default` is SQLite. A Postgres `default` alongside an alias on SQLite is not a collision, and there is no file to compare | `test_a_postgres_default_alongside_sqlite_is_not_a_collision` |
 | CF-14 | `default_conn_max_age` defaults to `0` and reaches every entry. Zero closes the connection at the end of each unit of work, which is the safe end of the scale and what a Twisted deployment needs — FCM reached its Postgres connection limit before setting it | `test_conn_max_age_defaults_to_zero_and_reaches_every_entry` |
 | CF-15 | `default_session_options` defaults to empty and reaches every entry | `test_session_options_default_to_empty_and_reach_every_entry` |
+| CF-17 | A common URL is set — `default` resolves to it. The common URL names the game's database, so it owns `default` by definition | `test_a_common_url_moves_the_default_entry` |
+| CF-18 | `default` and every alias without a URL of its own name the **same** database, so the router list is empty and "one database" is literally true rather than assumed | `test_the_game_and_every_quiet_alias_name_one_database` |
+| CF-19 | An alias with its own URL still splits off it — `default` follows the common URL, that alias does not, and exactly one router is active | `test_an_alias_with_its_own_url_still_splits_off_the_common_one` |
+| CF-20 | `default` gets the same connection treatment as the aliases: `default_conn_max_age` and the game-wide session options land on it too | `test_the_moved_default_gets_the_same_connection_treatment` |
+| CF-21 | A `default` the consumer wrote themselves is **replaced** when a common URL is set. Deliberate, and pinned so it is not later "fixed" into a merge or a skip-if-present | `test_a_consumer_set_default_is_replaced_by_the_common_url` |
+| CF-22 | An alias sharing the game's database **through the common URL** is not a collision — that is the arrangement, not a mistake. The check applies to split aliases only, which is what keeps CF-12 meaningful without refusing rung 2 outright | `test_sharing_the_game_database_through_the_common_url_is_not_a_collision` |
 | CF-16 | Routers the consumer already had are kept, with ours appended after. Overwriting the list would drop a router they wrote and send whatever it routed to `default`, silently. Theirs first, because Django takes the first non-`None` answer and an explicit choice of theirs should win over ours | `test_a_consumers_own_routers_are_kept` |
 
 ## BC — `check_settings()`, the boot check

@@ -55,6 +55,37 @@ def alias_url_variable(alias):
     return f"{ALIAS_URL_PREFIX}{alias.upper()}"
 
 
+def parse_url(url):
+    """Parse a database URL into a ``DATABASES`` entry.
+
+    A named wrapper so ``configure()`` can place ``default`` the same way an
+    alias is placed, rather than reaching for the parser itself.
+
+    Args:
+        url (str): the URL.
+
+    Returns:
+        dict: a Django ``DATABASES`` entry, without connection settings.
+    """
+    return dj_database_url.parse(url)
+
+
+def apply_connection_settings(entry, conn_max_age, session_options):
+    """Put the connection settings on an entry, whatever produced it.
+
+    Shared so ``default`` gets exactly what an alias gets — a game database
+    with a different connection lifetime from the libraries sharing it would
+    be a surprise nobody asked for.
+
+    Args:
+        entry (dict): a ``DATABASES`` entry, modified in place.
+        conn_max_age (int or None): the lifetime to set.
+        session_options (Mapping): Postgres session parameters, possibly empty.
+    """
+    entry["CONN_MAX_AGE"] = conn_max_age
+    _apply_session_options(entry, session_options)
+
+
 def resolve_database(
     spec,
     game_dir,
@@ -105,7 +136,7 @@ def resolve_database(
     # is an ordinary deployment state and means the same as an absent one.
     own_url = env.get(own_variable) or None
     if own_url:
-        entry = dj_database_url.parse(own_url)
+        entry = parse_url(own_url)
     else:
         common_url = env.get(common_url_var) or None
         if common_url:
@@ -118,7 +149,7 @@ def resolve_database(
                     f"leave both unset and it falls back to its own SQLite "
                     f"file."
                 )
-            entry = dj_database_url.parse(common_url)
+            entry = parse_url(common_url)
         else:
             entry = {
                 "ENGINE": SQLITE_ENGINE,
@@ -127,15 +158,12 @@ def resolve_database(
                 ),
             }
 
-    # On every rung, engine included. Meaningless on SQLite rather than
-    # harmful, and one rule is one less thing to get wrong. The spec wins
-    # where it said anything at all — and `None` is something, so the test is
-    # against the sentinel rather than for truthiness.
-    entry["CONN_MAX_AGE"] = (
-        default_conn_max_age if spec.conn_max_age is UNSET else spec.conn_max_age
-    )
-    _apply_session_options(
+    # On every rung, engine included. The spec wins where it said anything at
+    # all — and `None` is something, so the test is against the sentinel
+    # rather than for truthiness.
+    apply_connection_settings(
         entry,
+        default_conn_max_age if spec.conn_max_age is UNSET else spec.conn_max_age,
         default_session_options
         if spec.session_options is UNSET
         else spec.session_options,

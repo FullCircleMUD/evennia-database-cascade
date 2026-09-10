@@ -3,6 +3,51 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-10 — All three rungs proven live, and two defects the unit tests could not see
+
+132 tests. The demo gamedir was run through every rung against a real Django, real routers and real
+migrations, and each one verified from outside the process by reading the SQLite files directly.
+
+| Rung | Environment | Result |
+|---|---|---|
+| own file each | nothing set | three databases, two routers, each row in its own |
+| shared | common URL | **one** database holding the game and both aliases, no routers |
+| mixed | common URL plus one alias URL | that alias split off, the other following the game, one router |
+
+**It found two defects, and neither was reachable from the unit suite.**
+
+**`default` never followed the common URL.** Setting it moved the aliases and left the game where
+Evennia had put it, so the shared rung produced two databases rather than one. `is_split` then
+reasoned *"the common URL is set, so this alias is on the game's database"* — false, since `default`
+had not moved — and switched the routers off anyway. The alias database was never created and nothing
+complained. On Postgres the same bug leaves the game quietly on SQLite while its libraries are on the
+server.
+
+The rule it broke, stated plainly: **the common URL names the game's database**, and every alias
+without a URL of its own is in it. `configure()` now points `default` there before resolving
+anything. Cases `CF-17` to `CF-21`, with `CF-18` the one that matters — it compares `default`'s
+`(ENGINE, NAME)` against every quiet alias and requires them equal.
+
+**Fixing that broke the collision check.** It refuses an alias whose SQLite file is the game's
+database, which is right for a fallback file and wrong for the shared rung, where being the game's
+database is the arrangement. It now applies to split aliases only. Case `CF-22`.
+
+**Why the suite missed both.** Every case asserted an alias resolved correctly, and `CF-02` asserted
+`default` was left alone — the bug, written down as the expected behaviour. Nothing compared the two.
+A unit test cannot catch a wrong contract; running it did, twice in an afternoon.
+
+**One more thing the run demonstrated**, in our own gamedir rather than in an argument: after the
+first rung-3 migrate, `evennia.db3` recorded `demo_app` and `demo_library` as applied while holding
+neither table. Recorded as migrated, tables absent — the exact failure this library exists to
+prevent, produced by routers doing their job. It also means switching rungs on an existing gamedir
+needs the game database rebuilt.
+
+**And the hang before any of it.** `evennia start` deadlocked with no error: macOS drives
+`sqlite3_initialize()` through libdispatch, which does not survive `fork()`, so a daemonising start
+blocks on the child's first SQLite call. The sibling demos in `evennia-scaling`, `evennia-shards` and
+`evennia-portal-multiplex` all carry the same `sqlean` block; this gamedir was built from a stock
+`evennia --init` and never got it. Added to `examples/requirements.txt` and the demo settings.
+
 ## 2026-09-10 — Proved end to end, stopped pretending to log, and made the knobs configurable
 
 126 tests. The design questions are closed; what is left is verification and the retrofits.

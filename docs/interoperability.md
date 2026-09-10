@@ -79,6 +79,19 @@ attributes on objects the consumer already has — so it has nothing for this li
 **No coupling.** Neither library imports the other. It owns no models, so it has no tables for this
 library to place.
 
+## evennia-logging-extension
+
+**No coupling.** At scaffold stage — no library code, no models — so there is nothing for this
+library to place.
+
+Worth watching for a different reason. This library logs nothing, because Evennia's `log_file` needs
+a running reactor and every part of this one works before there is one (principle 8 in
+[CLAUDE.md](../CLAUDE.md)). If logging-extension grows a mechanism that writes without a reactor,
+that decision is worth revisiting rather than inheriting.
+
+`[TBD — confirm once it has code: whether it owns tables, and whether it can write before the reactor
+starts.]`
+
 ## evennia-message-bus
 
 **Hard dependency, in the other direction** — message-bus would depend on this library.

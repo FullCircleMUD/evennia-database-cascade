@@ -8,6 +8,10 @@
 
 evennia
 
+# macOS only, and load-bearing there — see the darwin block at the top of
+# demo_game/server/conf/settings.py. Harmless everywhere else.
+sqlean.py
+
 # The library under test.
 -e ..
 
