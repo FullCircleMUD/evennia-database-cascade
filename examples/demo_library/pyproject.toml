@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demo-library"
+version = "0.0.1"
+description = "A throwaway consumer of evennia-database-cascade, for the demo gamedir."
+requires-python = ">=3.10"
+dependencies = [
+    # The point of this package. The boot check reads this line out of the
+    # installed metadata to decide the library must declare a db_spec — which
+    # a gamedir can never exercise, because a gamedir is not a distribution.
+    "evennia-database-cascade",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["demo_library*"]

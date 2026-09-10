@@ -1,0 +1,18 @@
+# The demo gamedir's environment. Install into examples/venv/:
+#
+#     python -m venv venv
+#     ./venv/bin/pip install -r requirements.txt
+#
+# Both local installs are editable, so an edit to the library is live in the
+# demo without reinstalling.
+
+evennia
+
+# The library under test.
+-e ..
+
+# A throwaway consumer, declaring the library as a dependency. It exists so
+# the boot check has a real distribution to read Requires-Dist from — the
+# gamedir's own app cannot exercise that, because a gamedir is not a
+# distribution.
+-e ./demo_library
