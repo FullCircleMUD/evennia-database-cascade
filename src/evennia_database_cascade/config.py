@@ -16,8 +16,6 @@ can, at the point it runs. What a consumer configures arrives as arguments to
 
 from importlib.metadata import packages_distributions, requires
 
-from .log import cascade_log
-
 # The prefix on the variable naming a database of one alias's own. The alias,
 # upper-cased, completes it.
 ALIAS_URL_PREFIX = "DATABASE_URL_"
@@ -32,6 +30,29 @@ DEFAULT_COMMON_URL_VAR = "DATABASE_URL"
 SQLITE_SUBDIRECTORY = "server"
 
 SQLITE_ENGINE = "django.db.backends.sqlite3"
+
+# "This spec said nothing; use the game-wide value."
+#
+# A sentinel rather than None, because None is a real Django value for
+# CONN_MAX_AGE — keep the connection forever. If None meant both "inherit" and
+# "persist unlimited", a spec asking for the second would silently get the
+# first.
+UNSET = object()
+
+# How long a connection is kept before being closed, unless a spec or the
+# consumer says otherwise. Zero closes it at the end of each unit of work,
+# which is the safe end of the scale: an Evennia deployment dispatches its
+# database work to short-lived Twisted worker threads, and a persistent
+# connection there is never reconsidered and never handed back. FullCircleMUD
+# reached its Postgres connection limit before setting this, and the game
+# locked up because nothing new could connect.
+DEFAULT_CONN_MAX_AGE = 0
+
+# Postgres session parameters applied to every alias whose spec declares none
+# of its own. Empty, because no session parameter is universal — the one
+# FullCircleMUD needs, hnsw.iterative_scan, belongs to whichever library
+# stores vectors. Never mutated: every entry is rendered into a fresh string.
+DEFAULT_SESSION_OPTIONS = {}
 
 # The module a library ships to declare its alias, found under its app.
 SPEC_MODULE_NAME = "db_spec"
@@ -158,12 +179,7 @@ def check_settings(installed_apps=None, databases=None):
             )
 
     if problems:
-        for problem in problems:
-            cascade_log(problem, level="ERROR")
         raise ImproperlyConfigured(" ".join(problems))
-
-    split = sum(1 for spec in specs if spec.alias in databases)
-    cascade_log(f"{len(specs)} alias(es) declared, {split} in DATABASES.")
 
 
 def _depends_on_us(app):

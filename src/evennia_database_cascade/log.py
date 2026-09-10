@@ -1,22 +1,29 @@
 # SPDX-License-Identifier: BSD-3-Clause
-"""Logging shim for evennia-database-cascade.
+"""Logging shim for evennia-database-cascade. **Nothing calls it.**
 
-Every line the library emits goes to its own ``cascade.log``, co-located with
-Evennia's other logs under ``settings.LOG_DIR``, so reading back which database
-each alias resolved to means reading one file rather than picking the lines out
-of the main server log.
+An agreed exception to the logging standard, and the file is kept only so the
+library lints as one of the corpus rather than looking like it forgot.
 
-Lines are timestamped by Evennia, not here. ``logger.log_file`` prefixes every
-line with ``<timestamp> [-] ``, in UTC, the same format the rest of the server
-logs use — so a cascade line and a `server.log` line can be read against each
-other directly. Adding our own would stamp every line twice.
+**Why nothing calls it.** Evennia's ``logger.log_file`` writes through
+``deferToThread``, which needs a running Twisted reactor. Every piece of this
+library does its work before one exists — ``configure()`` runs while the
+consumer's settings module is still executing, the boot check runs during
+``django.setup()``, and the migrate helper runs as a management command in a
+process that starts no reactor at all. Calling this from any of them opens the
+file and writes nothing, which was measured rather than assumed: a 0-byte
+``cascade.log`` beside a demo gamedir that had just refused a migration.
 
-Outside an Evennia engine — tests, or any caller where Evennia is not
-bootstrapped — ``cascade_log`` is a silent no-op. The import is lazy and an
-ImportError is swallowed; the library deliberately does not fall back to stderr
-or a local file.
+A mechanism of our own was considered and judged unnecessary. Every failure
+here is fatal — the server does not start, or the command dies — so the
+exception and its traceback are already in front of whoever needs them, and a
+log file is for reading later about a process that kept running.
 
-Internal to the library, not part of the consumer-facing API.
+The one part of this library that does run with a reactor up is
+``CascadeRouter``, and it has nothing to report: it compares an app label and
+returns an alias.
+
+What follows is the standard shim, verbatim, so that if a reason to log ever
+does appear it is already the same shape as every sibling's.
 """
 
 import traceback

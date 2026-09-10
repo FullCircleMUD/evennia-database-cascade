@@ -38,7 +38,7 @@ from evennia_database_cascade import config as config_module
 from evennia_database_cascade import configure
 from evennia_database_cascade import router as router_module
 from evennia_database_cascade import migrate as migrate_module
-from evennia_database_cascade.config import check_settings, get_common_url_var
+from evennia_database_cascade.config import UNSET, check_settings, get_common_url_var
 from evennia_database_cascade.log import cascade_log
 from evennia_database_cascade.migrate import migrate_all
 from evennia_database_cascade.configure import GameDatabaseCollision
@@ -110,9 +110,6 @@ class Spec:
 SPEC = Spec({alias!r})
 """
 
-# ValueError rather than RuntimeError: NotImplementedError subclasses
-# RuntimeError, so a stubbed-out discover_specs would satisfy the assertion
-# for the wrong reason and the case would pass before it was implemented.
 def spec_module_source(**fields):
     """The source of a db_spec declaring a real AliasSpec.
 
@@ -127,6 +124,9 @@ def spec_module_source(**fields):
     )
 
 
+# ValueError rather than RuntimeError: NotImplementedError subclasses
+# RuntimeError, so a stubbed-out discover_specs would satisfy the assertion
+# for the wrong reason and the case would pass before it was implemented.
 RAISING_SPEC_MODULE = """
 raise ValueError("this db_spec is broken")
 """
@@ -387,6 +387,39 @@ class AliasSpecTest(unittest.TestCase):
         """SP-10 — spec.py imports nothing from Django."""
         self.assertEqual(django_imports(spec_module), [])
 
+    def test_conn_max_age_says_nothing_by_default(self):
+        """SP-11 — conn_max_age defaults to the UNSET sentinel."""
+        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+
+        self.assertIs(spec.conn_max_age, UNSET)
+
+    def test_a_spec_keeps_the_conn_max_age_it_was_given(self):
+        """SP-12 — a spec that sets it keeps the value, None included."""
+        self.assertEqual(
+            AliasSpec(app_label="a", alias="a", conn_max_age=60).conn_max_age, 60
+        )
+        self.assertIsNone(
+            AliasSpec(app_label="b", alias="b", conn_max_age=None).conn_max_age
+        )
+
+    def test_session_options_say_nothing_by_default(self):
+        """SP-13 — session_options defaults to the UNSET sentinel."""
+        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+
+        self.assertIs(spec.session_options, UNSET)
+
+    def test_a_spec_keeps_the_session_options_it_was_given(self):
+        """SP-14 — a spec that sets them keeps the mapping."""
+        options = {"hnsw.iterative_scan": "relaxed_order"}
+
+        spec = AliasSpec(
+            app_label="evennia_ai_memory",
+            alias="ai_memory",
+            session_options=options,
+        )
+
+        self.assertEqual(spec.session_options, options)
+
 
 class ValidateSpecsTest(unittest.TestCase):
     """validate_specs — judging the specs once they are all in hand."""
@@ -613,6 +646,96 @@ class ResolveDatabaseTest(unittest.TestCase):
         self.assertEqual(
             entry["NAME"], os.path.join(GAME_DIR, "server", "ledger.db3")
         )
+
+    def test_the_entry_carries_the_conn_max_age_it_was_given(self):
+        """RS-13 — the game-wide value lands on the entry."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(self.spec(), GAME_DIR, env, default_conn_max_age=120)
+
+        self.assertEqual(entry["CONN_MAX_AGE"], 120)
+
+    def test_a_spec_overrides_the_game_wide_conn_max_age(self):
+        """RS-14 — a spec's own value wins, for that alias only."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(
+            self.spec(conn_max_age=600), GAME_DIR, env, default_conn_max_age=0
+        )
+
+        self.assertEqual(entry["CONN_MAX_AGE"], 600)
+
+    def test_none_on_a_spec_is_a_value_not_an_absence(self):
+        """RS-15 — conn_max_age=None means persist forever, not "unset"."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(
+            self.spec(conn_max_age=None), GAME_DIR, env, default_conn_max_age=0
+        )
+
+        self.assertIsNone(entry["CONN_MAX_AGE"])
+
+    def test_conn_max_age_is_applied_on_every_rung(self):
+        """RS-16 — including SQLite; no branch on engine."""
+        for env in (
+            {"DATABASE_URL_XRPL": OWN_URL},
+            {"DATABASE_URL": COMMON_URL},
+            {},
+        ):
+            entry = resolve_database(self.spec(), GAME_DIR, env, default_conn_max_age=45)
+            self.assertEqual(entry["CONN_MAX_AGE"], 45, msg=f"env={env}")
+
+    def test_session_options_are_rendered_into_the_entry(self):
+        """RS-17 — rendered as -c name=value pairs into OPTIONS["options"]."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(
+            self.spec(),
+            GAME_DIR,
+            env,
+            default_session_options={"statement_timeout": "5s"},
+        )
+
+        self.assertIn("-c statement_timeout=5s", entry["OPTIONS"]["options"])
+
+    def test_a_spec_overrides_the_game_wide_session_options(self):
+        """RS-18 — a spec's own mapping wins, for that alias only."""
+        env = {"DATABASE_URL_XRPL": OWN_URL}
+
+        entry = resolve_database(
+            self.spec(session_options={"hnsw.iterative_scan": "relaxed_order"}),
+            GAME_DIR,
+            env,
+            default_session_options={"statement_timeout": "5s"},
+        )
+
+        rendered = entry["OPTIONS"]["options"]
+        self.assertIn("-c hnsw.iterative_scan=relaxed_order", rendered)
+        self.assertNotIn("statement_timeout", rendered)
+
+    def test_session_options_are_appended_to_what_the_url_produced(self):
+        """RS-19 — a ?sslmode=require in the URL survives."""
+        env = {"DATABASE_URL_XRPL": OWN_URL + "?sslmode=require"}
+
+        entry = resolve_database(
+            self.spec(),
+            GAME_DIR,
+            env,
+            default_session_options={"statement_timeout": "5s"},
+        )
+
+        self.assertEqual(entry["OPTIONS"]["sslmode"], "require")
+        self.assertIn("-c statement_timeout=5s", entry["OPTIONS"]["options"])
+
+    def test_session_options_are_skipped_on_sqlite(self):
+        """RS-20 — a libpq string would break a SQLite connection."""
+        entry = resolve_database(
+            self.spec(session_options={"statement_timeout": "5s"}),
+            GAME_DIR,
+            {},
+        )
+
+        self.assertNotIn("OPTIONS", entry)
 
 
 class IsSplitTest(unittest.TestCase):
@@ -969,6 +1092,49 @@ class ConfigureTest(unittest.TestCase):
 
         self.assertEqual(databases["xrpl"]["ENGINE"], "django.db.backends.sqlite3")
 
+    def test_conn_max_age_defaults_to_zero_and_reaches_every_entry(self):
+        """CF-14 — the game-wide default is 0, applied to every alias."""
+        apps = [
+            self.app("cf14_one", app_label="cf14_one", alias="one"),
+            self.app("cf14_two", app_label="cf14_two", alias="two"),
+        ]
+
+        databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
+
+        self.assertEqual(databases["one"]["CONN_MAX_AGE"], 0)
+        self.assertEqual(databases["two"]["CONN_MAX_AGE"], 0)
+
+        databases, _ = configure(
+            self.game_databases(), apps, GAME_DIR, {}, default_conn_max_age=300
+        )
+
+        self.assertEqual(databases["one"]["CONN_MAX_AGE"], 300)
+
+    def test_session_options_default_to_empty_and_reach_every_entry(self):
+        """CF-15 — default_session_options defaults to empty."""
+        apps = [
+            self.app("cf15_one", app_label="cf15_one", alias="one"),
+            self.app("cf15_two", app_label="cf15_two", alias="two"),
+        ]
+
+        databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
+
+        self.assertNotIn("OPTIONS", databases["one"])
+
+        env = {"DATABASE_URL": COMMON_URL}
+        databases, _ = configure(
+            self.game_databases(),
+            apps,
+            GAME_DIR,
+            env,
+            default_session_options={"statement_timeout": "5s"},
+        )
+
+        for alias in ("one", "two"):
+            self.assertIn(
+                "-c statement_timeout=5s", databases[alias]["OPTIONS"]["options"]
+            )
+
 
 class CheckSettingsTest(unittest.TestCase):
     """check_settings — the boot check, in AppConfig.ready()."""
@@ -978,7 +1144,6 @@ class CheckSettingsTest(unittest.TestCase):
         self.addCleanup(self.apps.teardown)
         self.distributions = {}
         self.requirements = {}
-        self.logged = []
 
         patches = [
             mock.patch.object(
@@ -990,11 +1155,6 @@ class CheckSettingsTest(unittest.TestCase):
                 config_module,
                 "requires",
                 lambda name: self.requirements.get(name),
-            ),
-            mock.patch.object(
-                config_module,
-                "cascade_log",
-                lambda message, **kwargs: self.logged.append(message),
             ),
         ]
         for patch in patches:
@@ -1108,24 +1268,6 @@ class CheckSettingsTest(unittest.TestCase):
         self.assertIn("bc09_silent", message)
         self.assertIn("xrpl", message)
 
-    def test_a_clean_run_logs_one_line(self):
-        """BC-10 — a clean run logs the cascade having run."""
-        app = self.app("bc10_app", app_label="bc10_app", alias="xrpl")
-
-        check_settings([app], self.databases_with("xrpl"))
-
-        self.assertEqual(len(self.logged), 1)
-        self.assertIn("1", self.logged[0])
-
-    def test_a_refusal_is_logged_before_it_is_raised(self):
-        """BC-11 — a refusal reaches the log as well as the caller."""
-        app = self.app("bc11_app", app_label="bc11_app", alias="xrpl")
-
-        with self.assertRaises(ImproperlyConfigured):
-            check_settings([app], self.databases_with())
-
-        self.assertTrue(any("xrpl" in line for line in self.logged))
-
     def test_ready_calls_the_check(self):
         """BC-12 — ready() calls check_settings, so it cannot go unrun."""
         from evennia_database_cascade import apps as apps_module
@@ -1143,22 +1285,13 @@ class MigrateAllTest(unittest.TestCase):
         self.apps = AppTree()
         self.addCleanup(self.apps.teardown)
         self.calls = []
-        self.logged = []
 
         def record(*args, **options):
             self.calls.append((args, options))
 
-        patches = [
-            mock.patch.object(migrate_module, "call_command", record),
-            mock.patch.object(
-                migrate_module,
-                "cascade_log",
-                lambda message, **kwargs: self.logged.append(message),
-            ),
-        ]
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
+        patch = mock.patch.object(migrate_module, "call_command", record)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def app(self, name, **spec_fields):
         """An app declaring a real AliasSpec."""
@@ -1224,8 +1357,8 @@ class MigrateAllTest(unittest.TestCase):
 
         self.assertEqual(self.aliases_migrated(), ["own"])
 
-    def test_a_failing_migrate_propagates_and_is_logged(self):
-        """MG-06 — the failure reaches the log and then the caller."""
+    def test_a_failing_migrate_propagates(self):
+        """MG-06 — a failing migrate reaches the caller rather than being swallowed."""
         app = self.app("mg06_app", app_label="mg06_app", alias="xrpl")
 
         # ValueError, not RuntimeError: NotImplementedError subclasses
@@ -1237,17 +1370,6 @@ class MigrateAllTest(unittest.TestCase):
         with mock.patch.object(migrate_module, "call_command", boom):
             with self.assertRaises(ValueError):
                 migrate_all([app], {})
-
-        self.assertTrue(any("migrate blew up" in line for line in self.logged))
-
-    def test_a_clean_run_logs_what_it_migrated(self):
-        """MG-07 — one line naming what was migrated."""
-        app = self.app("mg07_app", app_label="mg07_app", alias="xrpl")
-
-        migrate_all([app], {})
-
-        self.assertEqual(len(self.logged), 1)
-        self.assertIn("xrpl", self.logged[0])
 
     def test_the_common_variable_comes_from_the_setting(self):
         """MG-08 — CASCADE_COMMON_URL_VAR, defaulting to DATABASE_URL."""

@@ -24,8 +24,11 @@ import dj_database_url
 from .config import (
     ALIAS_URL_PREFIX,
     DEFAULT_COMMON_URL_VAR,
+    DEFAULT_CONN_MAX_AGE,
+    DEFAULT_SESSION_OPTIONS,
     SQLITE_ENGINE,
     SQLITE_SUBDIRECTORY,
+    UNSET,
 )
 
 
@@ -52,7 +55,14 @@ def alias_url_variable(alias):
     return f"{ALIAS_URL_PREFIX}{alias.upper()}"
 
 
-def resolve_database(spec, game_dir, env, common_url_var=DEFAULT_COMMON_URL_VAR):
+def resolve_database(
+    spec,
+    game_dir,
+    env,
+    common_url_var=DEFAULT_COMMON_URL_VAR,
+    default_conn_max_age=DEFAULT_CONN_MAX_AGE,
+    default_session_options=DEFAULT_SESSION_OPTIONS,
+):
     """Build the ``DATABASES`` entry for one spec.
 
     Three rungs, first match wins:
@@ -74,6 +84,13 @@ def resolve_database(spec, game_dir, env, common_url_var=DEFAULT_COMMON_URL_VAR)
         common_url_var (str): the variable naming the shared database. An
             argument rather than a constant, because it is one value for a
             whole deployment rather than something each library declares.
+        default_conn_max_age (int or None): the connection lifetime for
+            this alias unless its spec declares one of its own. The consumer
+            owns this value — a spec belongs to the library that wrote it, so
+            without it a consumer would have no lever over an alias they do
+            not own.
+        default_session_options (Mapping): Postgres session parameters for
+            this alias unless its spec declares its own. Postgres only.
 
     Returns:
         dict: a Django ``DATABASES`` entry.
@@ -88,24 +105,65 @@ def resolve_database(spec, game_dir, env, common_url_var=DEFAULT_COMMON_URL_VAR)
     # is an ordinary deployment state and means the same as an absent one.
     own_url = env.get(own_variable) or None
     if own_url:
-        return dj_database_url.parse(own_url)
+        entry = dj_database_url.parse(own_url)
+    else:
+        common_url = env.get(common_url_var) or None
+        if common_url:
+            if not spec.allow_sharing_common_db:
+                raise SharedDatabaseRefused(
+                    f"{common_url_var} is set and {spec.alias!r} may not "
+                    f"share it. Its tables would not be a second set of its "
+                    f"own — they are the ones already in that database. Give "
+                    f"it a database of its own by setting {own_variable}, or "
+                    f"leave both unset and it falls back to its own SQLite "
+                    f"file."
+                )
+            entry = dj_database_url.parse(common_url)
+        else:
+            entry = {
+                "ENGINE": SQLITE_ENGINE,
+                "NAME": os.path.join(
+                    game_dir, SQLITE_SUBDIRECTORY, spec.sqlite_filename
+                ),
+            }
 
-    common_url = env.get(common_url_var) or None
-    if common_url:
-        if not spec.allow_sharing_common_db:
-            raise SharedDatabaseRefused(
-                f"{common_url_var} is set and {spec.alias!r} may not share "
-                f"it. Its tables would not be a second set of its own — they "
-                f"are the ones already in that database. Give it a database "
-                f"of its own by setting {own_variable}, or leave both unset "
-                f"and it falls back to its own SQLite file."
-            )
-        return dj_database_url.parse(common_url)
+    # On every rung, engine included. Meaningless on SQLite rather than
+    # harmful, and one rule is one less thing to get wrong. The spec wins
+    # where it said anything at all — and `None` is something, so the test is
+    # against the sentinel rather than for truthiness.
+    entry["CONN_MAX_AGE"] = (
+        default_conn_max_age if spec.conn_max_age is UNSET else spec.conn_max_age
+    )
+    _apply_session_options(
+        entry,
+        default_session_options
+        if spec.session_options is UNSET
+        else spec.session_options,
+    )
+    return entry
 
-    return {
-        "ENGINE": SQLITE_ENGINE,
-        "NAME": os.path.join(game_dir, SQLITE_SUBDIRECTORY, spec.sqlite_filename),
-    }
+
+def _apply_session_options(entry, options):
+    """Render session parameters into a Postgres entry's ``OPTIONS``.
+
+    Appended rather than assigned: ``dj_database_url`` already puts a URL's
+    query parameters there — ``?sslmode=require`` lands in ``OPTIONS`` — so
+    replacing the dict would drop them without a word.
+
+    Skipped on anything that is not Postgres. Unlike ``CONN_MAX_AGE``, this
+    one genuinely needs the branch: ``OPTIONS`` on SQLite means something else
+    entirely, and a libpq string handed to it breaks the connection outright.
+
+    Args:
+        entry (dict): the ``DATABASES`` entry, modified in place.
+        options (Mapping): ``{parameter: value}``, possibly empty.
+    """
+    if not options or "postgresql" not in entry.get("ENGINE", ""):
+        return
+
+    rendered = " ".join(f"-c {name}={value}" for name, value in options.items())
+    existing = str(entry.setdefault("OPTIONS", {}).get("options", "")).strip()
+    entry["OPTIONS"]["options"] = f"{existing} {rendered}".strip()
 
 
 def is_split(alias, env, common_url_var=DEFAULT_COMMON_URL_VAR):

@@ -6,16 +6,20 @@ the installed apps declare, validation judges the set, resolution places each
 alias, and the router list follows from which of them ended up on a database
 of their own.
 
-**This module is on the settings path, so it imports nothing from Django and
-never logs.** The shim reaches ``settings.LOG_DIR``, which raises before
-``django.setup()``. Failures here raise, and the traceback is the record —
-the server does not start, so there is no run to read a log file from. See
-principle 8 in this repo's ``CLAUDE.md``.
+**This module is on the settings path, so it imports nothing from Django.**
+Nothing here logs either — see ``log.py`` for why nothing in this library
+does. Failures raise, and the traceback is the record, since the server does
+not start.
 """
 
 import os
 
-from .config import DEFAULT_COMMON_URL_VAR, SQLITE_ENGINE
+from .config import (
+    DEFAULT_COMMON_URL_VAR,
+    DEFAULT_CONN_MAX_AGE,
+    DEFAULT_SESSION_OPTIONS,
+    SQLITE_ENGINE,
+)
 from .discovery import discover_specs, validate_specs
 from .resolve import resolve_database, split_aliases
 from .router import CascadeRouter
@@ -37,6 +41,8 @@ def configure(
     game_dir,
     env,
     common_url_var=DEFAULT_COMMON_URL_VAR,
+    default_conn_max_age=DEFAULT_CONN_MAX_AGE,
+    default_session_options=DEFAULT_SESSION_OPTIONS,
 ):
     """Resolve every declared alias, and choose the routers to match.
 
@@ -62,6 +68,19 @@ def configure(
         env (Mapping): environment variables to read.
         common_url_var (str): the variable naming the database every alias
             shares when it has none of its own.
+        default_conn_max_age (int or None): how long a connection is kept
+            before being closed, for every alias whose spec does not declare
+            one of its own. Defaults to 0 — closed at the end of each unit of
+            work, which is what a Twisted deployment needs.
+
+            **Any spec can override this for its own alias**, and one that
+            does wins. This value is what applies to everything that stayed
+            quiet — which is most of them, and is the consumer's only lever
+            over an alias belonging to a library they did not write.
+        default_session_options (Mapping): Postgres session parameters for
+            every alias whose spec declares none of its own. Empty by
+            default — no session parameter is universal. A spec that sets its
+            own replaces this for that alias.
 
     Returns:
         tuple: the new ``DATABASES``, and the ``DATABASE_ROUTERS`` list —
@@ -80,7 +99,14 @@ def configure(
 
     resolved = dict(databases)
     for spec in specs:
-        entry = resolve_database(spec, game_dir, env, common_url_var)
+        entry = resolve_database(
+            spec,
+            game_dir,
+            env,
+            common_url_var,
+            default_conn_max_age,
+            default_session_options,
+        )
         _refuse_the_game_database_file(spec, entry, resolved["default"])
         resolved[spec.alias] = entry
 

@@ -69,7 +69,7 @@ with the unit that needs them.
 
 ## SP — `AliasSpec`
 
-The five fields a library declares about its alias. `allow_sharing_common_db` and
+What a library declares about its alias. `allow_sharing_common_db` and
 `allow_foreign_tables_in_own_db` are named at length deliberately: they are read by someone
 installing a library, not by us, and each is a permission rather than a state.
 
@@ -85,6 +85,10 @@ installing a library, not by us, and each is a permission rather than a state.
 | SP-08 | The spec is frozen — assigning to a field raises. Free from `frozen=True`; the case exists so a later change cannot quietly remove it | `test_a_spec_is_frozen` |
 | SP-09 | An unknown field name raises at construction. This is the "typos fail loudly" property that chose a dataclass over a dict | `test_an_unknown_field_raises` |
 | SP-10 | `spec.py` imports nothing from Django. Read off the module's AST — importing it inside the suite proves nothing, because Django is configured there. Likely becomes a cross-cutting case over every module on the settings path | `test_spec_module_imports_nothing_from_django` |
+| SP-11 | `conn_max_age` defaults to the `UNSET` sentinel, meaning the spec says nothing and the game-wide value applies | `test_conn_max_age_says_nothing_by_default` |
+| SP-12 | A spec that sets `conn_max_age` keeps the value, `None` included. `None` is a real Django value — persist the connection forever — which is why the sentinel cannot be `None` | `test_a_spec_keeps_the_conn_max_age_it_was_given` |
+| SP-13 | `session_options` defaults to the `UNSET` sentinel, meaning the spec says nothing | `test_session_options_say_nothing_by_default` |
+| SP-14 | A spec that sets `session_options` keeps the mapping it was given | `test_a_spec_keeps_the_session_options_it_was_given` |
 
 ## VS — `validate_specs(specs)`
 
@@ -130,6 +134,14 @@ SQLite falls to `<game_dir>/server/`, which is where Evennia puts every database
 | RS-10 | `allow_sharing_common_db=False` with its own URL set resolves normally | `test_a_spec_refusing_the_common_db_accepts_its_own_url` |
 | RS-11 | `allow_sharing_common_db=False` with neither set resolves to its own SQLite file. Only the shared rung is refused, not the fallback | `test_a_spec_refusing_the_common_db_still_falls_back_to_sqlite` |
 | RS-12 | The SQLite entry uses the spec's `sqlite_filename`, including a non-default one | `test_the_sqlite_entry_uses_the_declared_filename` |
+| RS-13 | The entry carries the `conn_max_age` it was given | `test_the_entry_carries_the_conn_max_age_it_was_given` |
+| RS-14 | A spec's own `conn_max_age` overrides the game-wide value, for that alias only | `test_a_spec_overrides_the_game_wide_conn_max_age` |
+| RS-15 | `conn_max_age=None` on a spec is honoured as a value — persist forever — rather than read as "unset" | `test_none_on_a_spec_is_a_value_not_an_absence` |
+| RS-16 | Applied on every rung, SQLite included. No branch on engine: meaningless there rather than harmful, and a uniform rule is one less thing to get wrong | `test_conn_max_age_is_applied_on_every_rung` |
+| RS-17 | `session_options` is rendered as `-c name=value` pairs into the entry's `OPTIONS["options"]` | `test_session_options_are_rendered_into_the_entry` |
+| RS-18 | A spec's own `session_options` overrides the game-wide default, for that alias only | `test_a_spec_overrides_the_game_wide_session_options` |
+| RS-19 | Appended to whatever `OPTIONS` the URL already produced, rather than replacing it — a `?sslmode=require` in the URL survives a library setting a parameter of its own | `test_session_options_are_appended_to_what_the_url_produced` |
+| RS-20 | Skipped entirely on a SQLite entry. Unlike `conn_max_age` this one does need a branch on engine: `OPTIONS` means something else there, and a libpq string breaks the connection outright | `test_session_options_are_skipped_on_sqlite` |
 
 ## SL — `is_split(alias, env, common_url_var)` and `split_aliases(specs, env, common_url_var)`
 
@@ -218,6 +230,8 @@ principle 8 in [CLAUDE.md](../CLAUDE.md). Failures raise, and the traceback is t
 | CF-11 | `common_url_var` reaches both the resolution and the split decision | `test_the_common_variable_name_reaches_both_steps` |
 | CF-12 | An alias whose resolved SQLite path is the game's own database file raises `GameDatabaseCollision`, naming the alias and the file | `test_an_alias_landing_on_the_game_database_file_is_refused` |
 | CF-13 | That check fires only where `default` is SQLite. A Postgres `default` alongside an alias on SQLite is not a collision, and there is no file to compare | `test_a_postgres_default_alongside_sqlite_is_not_a_collision` |
+| CF-14 | `default_conn_max_age` defaults to `0` and reaches every entry. Zero closes the connection at the end of each unit of work, which is the safe end of the scale and what a Twisted deployment needs — FCM reached its Postgres connection limit before setting it | `test_conn_max_age_defaults_to_zero_and_reaches_every_entry` |
+| CF-15 | `default_session_options` defaults to empty and reaches every entry | `test_session_options_default_to_empty_and_reach_every_entry` |
 
 ## BC — `check_settings()`, the boot check
 
@@ -251,8 +265,8 @@ write a line.
 | BC-07 | An app with a `db_spec` whose alias is absent — raises, naming the app and the alias | `test_a_declared_alias_missing_from_databases_is_refused` |
 | BC-08 | Two such apps — one raise, naming both | `test_two_missing_aliases_are_reported_together` |
 | BC-09 | Both kinds of problem at once — one raise, naming all of them | `test_both_kinds_of_problem_are_reported_together` |
-| BC-10 | A clean run logs one line: the cascade ran, how many aliases, how many split | `test_a_clean_run_logs_one_line` |
-| BC-11 | A refusal is logged before it is raised | `test_a_refusal_is_logged_before_it_is_raised` |
+| BC-10 | **Retired.** Asserted a log line on a clean run. Nothing in this library can log — see `log.py` — and the case passed only because the shim was mocked | — |
+| BC-11 | **Retired.** Asserted a refusal was logged before being raised. Same reason as BC-10 | — |
 | BC-12 | `ready()` calls the check, so it cannot be defined and never run | `test_ready_calls_the_check` |
 
 ## MG — `migrate_all()` and `evennia cascade_migrate`
@@ -282,18 +296,19 @@ reads it back from the same place.
 | MG-03 | No split aliases — the bare call and nothing else | `test_nothing_split_means_the_bare_call_only` |
 | MG-04 | The split set comes from `split_aliases`, not a second derivation of the same rule | `test_the_split_set_comes_from_split_aliases` |
 | MG-05 | An unsplit alias never gets its own call — the bare migrate already covered it | `test_an_unsplit_alias_never_gets_its_own_call` |
-| MG-06 | A failing migrate propagates rather than being swallowed, and the failure is logged first | `test_a_failing_migrate_propagates_and_is_logged` |
-| MG-07 | A clean run logs one line naming what was migrated | `test_a_clean_run_logs_what_it_migrated` |
+| MG-06 | A failing migrate propagates rather than being swallowed | `test_a_failing_migrate_propagates` |
+| MG-07 | **Retired.** Asserted a log line naming what was migrated. Nothing in this library can log — see `log.py`. The command's own stdout is the record | — |
 | MG-08 | `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, defaulting to `DATABASE_URL` | `test_the_common_variable_comes_from_the_setting` |
 | MG-09 | The management command calls `migrate_all`, so the two cannot drift | `test_the_command_calls_migrate_all` |
 | MG-10 | Options are forwarded to `migrate` untouched, and a caller-supplied `database` is refused rather than silently overridden | `test_options_are_forwarded_and_database_is_refused` |
 
 ## LG — `cascade_log`
 
-The shim is copied verbatim across the libraries, so these cases are the same shape as theirs. What
-is specific here is the filename and the function name, and that **it is never called from the
-settings path** — before `django.setup()` it raises, which is principle 8 and the reason nothing up
-there logs at all.
+**Nothing in this library calls the shim**, so these cases prove only that our copy is faithful to
+the standard's — not that anything is ever written. Evennia's `log_file` writes through
+`deferToThread` and every part of this library runs before a reactor exists, so a call would open the
+file and write nothing. Measured, not assumed: a 0-byte `cascade.log` beside a demo gamedir that had
+just refused a migration. See `log.py` and principle 8.
 
 | ID | Case | Test function |
 |---|---|---|

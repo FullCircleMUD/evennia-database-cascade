@@ -7,7 +7,8 @@ recorded as applied and no table is created. Every split alias therefore needs
 ``migrate --database <alias>``, and this is the thing that knows the list.
 
 **Not on the settings path.** This runs from a management command, after
-``django.setup()``, so it may import Django and it logs.
+``django.setup()``, so it may import Django. It does not log — see ``log.py``
+for why nothing in this library does.
 
 It re-derives the split set through ``split_aliases`` rather than being handed
 one, because ``configure()`` ran in a different process and nothing it
@@ -22,7 +23,6 @@ from django.core.management import call_command
 
 from .config import get_common_url_var, get_installed_apps
 from .discovery import discover_specs
-from .log import cascade_log
 from .resolve import split_aliases
 
 
@@ -62,18 +62,10 @@ def migrate_all(installed_apps=None, env=None, **options):
     specs = discover_specs(installed_apps)
     split = split_aliases(specs, env, get_common_url_var())
 
-    try:
-        # Covers `default` and every alias sharing its database, because no
-        # router stands between them.
-        call_command("migrate", **options)
-        for alias in split:
-            call_command("migrate", database=alias, **options)
-    except Exception as err:
-        cascade_log(f"migrate failed: {err}", level="ERROR", trace=True)
-        raise
+    # Covers `default` and every alias sharing its database, because no router
+    # stands between them.
+    call_command("migrate", **options)
+    for alias in split:
+        call_command("migrate", database=alias, **options)
 
-    cascade_log(
-        f"migrated the game database"
-        + (f", then {', '.join(split)}" if split else " and nothing else")
-    )
     return split

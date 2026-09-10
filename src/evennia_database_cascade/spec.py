@@ -14,6 +14,8 @@ A consumer's ``db_spec`` imports ``AliasSpec`` from here while their
 
 from dataclasses import dataclass
 
+from .config import UNSET
+
 
 @dataclass(frozen=True)
 class AliasSpec:
@@ -37,6 +39,17 @@ class AliasSpec:
         allow_foreign_tables_in_own_db (bool): may another app's tables be
             migrated into this alias's database? ``True`` only where that is
             the point, as it is for a schema clone. Defaults to ``False``.
+        conn_max_age (int or None): how long this alias's connection is kept
+            before being closed. Left alone, the game-wide value passed to
+            ``configure()`` applies. Set it only where this alias's access
+            pattern genuinely differs from the rest of the deployment's —
+            ``None`` here means keep the connection forever, which is why the
+            "say nothing" default is a sentinel rather than ``None``.
+        session_options (Mapping): Postgres session parameters for this
+            alias, as ``{name: value}``. Rendered into ``-c name=value``
+            pairs and appended to whatever the URL already put in
+            ``OPTIONS``. Left alone, the game-wide value applies. Skipped on
+            SQLite, where ``OPTIONS`` means something else entirely.
 
     The two ``allow_`` fields are the inbound and outbound halves of the same
     question — whether this alias may go into someone else's database, and
@@ -53,6 +66,8 @@ class AliasSpec:
     sqlite_filename: str = ""
     allow_sharing_common_db: bool = True
     allow_foreign_tables_in_own_db: bool = False
+    conn_max_age: object = UNSET
+    session_options: object = UNSET
 
     def __post_init__(self):
         # Derived rather than defaulted in the signature, because the default

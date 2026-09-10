@@ -65,17 +65,21 @@ Agreed in the design conversation of 2026-09-08. Every implementation decision m
    active and which aliases need `migrate --database <alias>`. They come from the same call, because
    the failure when they disagree is silent: a router refuses the tables while Django records the
    migrations as applied, leaving a database that looks migrated and holds nothing.
-8. **Nothing on the settings path can log, and errors there raise instead.** `cascade_log` reaches
-   Evennia's `logger.log_file`, which reads `settings.LOG_DIR` — before `django.setup()` that raises
-   `ImproperlyConfigured`, tested rather than assumed. So `discover_specs`, `validate_specs`,
-   `resolve_database`, `CascadeRouter` and `configure()` never call the shim; their failures raise,
-   and the traceback is the record, since the server does not start. The shim is **not** given a
-   second `except` for this: it stays verbatim across the libraries, and one that quietly worked
-   everywhere would invite calls from where they do not belong.
+8. **This library logs nothing, and that is an agreed exception to the logging standard.** Evennia's
+   `logger.log_file` writes through `deferToThread`, which needs a running Twisted reactor, and every
+   part of this library works before one exists — `configure()` while the consumer's settings module
+   is still executing, the boot check during `django.setup()`, the migrate helper in a management
+   command process that starts no reactor at all. A call opens the file and writes nothing. Measured,
+   not reasoned: a 0-byte `cascade.log` beside a demo gamedir that had just refused a migration.
 
-   Logging begins once Django is up — the boot check and the migrate helper. **Log the failures, not
-   the happy path**, plus one line each for having booted and having migrated so a reader can tell
-   which run they are looking at.
+   A mechanism of our own was considered and judged unnecessary. Every failure here is fatal — the
+   server does not start, or the command dies — so the exception and its traceback are already in
+   front of whoever needs them.
+
+   `log.py` stays, verbatim and uncalled, so the library lints as one of the corpus rather than
+   looking like it forgot; its docstring carries this reasoning. The single `log_shim_unused` warning
+   is the deliberate note. **Do not "fix" it by adding a call site** — the call would do nothing, and
+   `CascadeRouter` is the only thing here that runs with a reactor up, with nothing to report.
 9. **`INSTALLED_APPS` is the consumer's, and unvalidatable.** A library left out of it never has its
    `ready()` run, so nothing of ours can notice. Everything after that point is validated as hard as
    it can be — spec fields when `configure()` runs, and the presence cross-check at boot.

@@ -38,7 +38,7 @@ SPEC = AliasSpec(
 )
 ```
 
-Two fields are required and three have defaults:
+Two fields are required and five have defaults:
 
 | Field | Default | What it says |
 |---|---|---|
@@ -47,6 +47,8 @@ Two fields are required and three have defaults:
 | `sqlite_filename` | `<alias>.db3` | The file this alias falls back to when no URL names a database for it |
 | `allow_sharing_common_db` | `True` | May this alias live in the database the common URL names? |
 | `allow_foreign_tables_in_own_db` | `False` | May another app's tables be migrated into this alias's database? |
+| `conn_max_age` | the game's | How long this alias's connection is kept before being closed. Left alone, the value passed to `configure()` applies |
+| `session_options` | the game's | Postgres session parameters for this alias, as `{name: value}`. Left alone, the value passed to `configure()` applies |
 
 The two `allow_` fields are the outbound and inbound halves of the same question, and they are
 independent — a library can want either, both or neither.
@@ -159,9 +161,49 @@ shard, each with its own settings module and its own game database. Each declare
 each is launched with `--settings`. Aliases genuinely shared between them carry their own
 `DATABASE_URL_<ALIAS>` and never reach this rung at all.
 
-The two connection knobs a resolved entry could carry — `CONN_MAX_AGE` and Postgres session options —
-are not settings and not implemented.
-`[TBD — needs discussion: whether they become spec fields, and what the defaults are.]`
+## The connection lifetime
+
+Not a setting — an argument, because only `configure()` reads it:
+
+```python
+DATABASES, DATABASE_ROUTERS = configure(
+    DATABASES, INSTALLED_APPS, GAME_DIR, os.environ, default_conn_max_age=0
+)
+```
+
+`0` is the default and closes the connection at the end of each unit of work. That is the safe end of
+the scale and the right answer for Evennia: database work is dispatched to short-lived Twisted worker
+threads, and a connection persisted there is never reconsidered and never handed back. FullCircleMUD
+reached its Postgres connection limit before setting it, and the game locked up because nothing new
+could connect.
+
+Raise it only with that in mind. `None` means keep connections forever.
+
+A single library whose access pattern genuinely differs can override it on its own spec, and only
+that alias changes. Note that `conn_max_age=None` on a spec means *persist forever* — saying nothing
+is the default, and the two are different.
+
+## Postgres session options
+
+The same shape, for parameters set on the connection itself:
+
+```python
+DATABASES, DATABASE_ROUTERS = configure(
+    DATABASES, INSTALLED_APPS, GAME_DIR, os.environ,
+    default_session_options={"statement_timeout": "5s"},
+)
+```
+
+Empty by default, because no session parameter is universal. They render to `-c name=value` pairs and
+are **appended** to whatever the URL already put in `OPTIONS` — so a `?sslmode=require` survives a
+library setting a parameter of its own. Skipped entirely on SQLite, where `OPTIONS` means something
+else and a libpq string breaks the connection.
+
+A library sets its own on its spec, and that replaces the game-wide value for that alias.
+`evennia-ai-memory` is the case: a filtered pgvector search asks the HNSW index for candidates before
+applying the filter, so it returns however few survive — FCM measured 1 row returned of 5 requested,
+across 100k rows. `hnsw.iterative_scan` keeps pulling until the filter yields enough, and it belongs
+to whichever library stores the vectors rather than to the deployment.
 
 ## What is not checked for you
 
@@ -186,9 +228,12 @@ are not settings and not implemented.
 
 ## What you see when something is wrong
 
-Nothing in `settings.py` can log — the shim reaches `settings.LOG_DIR`, which does not exist yet — so
-failures there raise and the server does not start. The traceback is the record.
+**This library writes no log file.** Not at boot, not during a migration, not ever. `cascade.log`
+will be created and stay empty; do not go looking in it.
 
-From the boot check onwards there is `cascade.log`, beside `server.log` in your `LOG_DIR`. It carries
-one line per boot and per migration run, and every failure. It stays quiet otherwise, so anything in
-it beyond those two lines is worth reading.
+Every failure raises instead, and every failure is fatal — a bad spec or a refused alias stops the
+settings module, the boot check stops `django.setup()`, and a failed migration stops the command. So
+the exception and its traceback are the record, and they are already in front of you.
+
+Why there is no log: Evennia writes log files through the Twisted reactor, and everything this
+library does happens before one exists.
