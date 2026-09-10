@@ -103,11 +103,13 @@ rather than in the ORM.
 
 ## evennia-scaling
 
-**No coupling anticipated.** Scaling has models but no router, so its tables sit in the game database
-and there is no alias to resolve.
+**No coupling, and settled rather than pending.** Scaling's `Ticket` table is in the consumer's game
+database deliberately: a ticket is written and read by one instance seconds apart, and after a wipe
+there is no handoff still in flight, so it meets neither test for taking an alias. Its `CLAUDE.md`
+rules it out of scope, `TK-05` pins it, and the ruling says plainly not to "fix" it into an alias.
 
-`[TBD — confirm with scaling: whether that placement is settled or provisional. A later decision to
-move its tables onto an alias would make it a consumer of this library and change this section.]`
+So there is nothing here for this library to place, and a later change of mind would be a change to
+scaling's design rather than a gap in this section.
 
 ## evennia-shards
 
