@@ -61,12 +61,9 @@ pending this library, rather than an oversight — so the helper should not be w
 
 ## evennia-calendar
 
-**No coupling anticipated.** Neither library imports the other. Calendar is at scaffold stage with no
-library code, and turns Evennia's game time into a date — it owns no models, so it has nothing for
-this library to place.
-
-`[TBD — confirm once calendar has code: whether it stores anything of its own. A calendar that only
-computes from `gametime` stays clear of this library entirely.]`
+**No coupling.** Neither library imports the other. Calendar turns Evennia's game time into a date,
+season and time of day — it computes from `gametime` and stores nothing of its own. No `models.py`,
+no router, nothing persisted through the ORM, so there is no alias for this library to place.
 
 ## evennia-database-cascade
 
