@@ -40,6 +40,7 @@ def configure(
     installed_apps,
     game_dir,
     env,
+    routers=(),
     common_url_var=DEFAULT_COMMON_URL_VAR,
     default_conn_max_age=DEFAULT_CONN_MAX_AGE,
     default_session_options=DEFAULT_SESSION_OPTIONS,
@@ -66,6 +67,14 @@ def configure(
         installed_apps (Iterable[str]): their ``INSTALLED_APPS``.
         game_dir (str): the Evennia game directory.
         env (Mapping): environment variables to read.
+        routers (Iterable): routers the consumer already had in
+            ``DATABASE_ROUTERS``. Ours are appended after them. Passed in
+            rather than replaced, because a consumer's own router being
+            dropped would send whatever it routed to ``default`` with
+            nothing said — the failure this library exists to prevent.
+            Theirs come first: Django takes the first non-``None`` answer,
+            and where both could answer, an explicit choice of theirs should
+            win over ours.
         common_url_var (str): the variable naming the database every alias
             shares when it has none of its own.
         default_conn_max_age (int or None): how long a connection is kept
@@ -111,9 +120,9 @@ def configure(
         resolved[spec.alias] = entry
 
     split = split_aliases(specs, env, common_url_var)
-    routers = [CascadeRouter(spec) for spec in specs if spec.alias in split]
+    ours = [CascadeRouter(spec) for spec in specs if spec.alias in split]
 
-    return resolved, routers
+    return resolved, list(routers) + ours
 
 
 def _refuse_the_game_database_file(spec, entry, default_entry):

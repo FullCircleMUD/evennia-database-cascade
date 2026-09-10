@@ -408,6 +408,22 @@ class AliasSpecTest(unittest.TestCase):
 
         self.assertIs(spec.session_options, UNSET)
 
+    def test_required_extensions_are_empty_by_default(self):
+        """SP-15 — required_extensions defaults to empty."""
+        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+
+        self.assertEqual(tuple(spec.required_extensions), ())
+
+    def test_a_spec_keeps_the_extensions_it_declared(self):
+        """SP-16 — a spec that declares extensions keeps them."""
+        spec = AliasSpec(
+            app_label="evennia_ai_memory",
+            alias="ai_memory",
+            required_extensions=("vector",),
+        )
+
+        self.assertEqual(tuple(spec.required_extensions), ("vector",))
+
     def test_a_spec_keeps_the_session_options_it_was_given(self):
         """SP-14 — a spec that sets them keeps the mapping."""
         options = {"hnsw.iterative_scan": "relaxed_order"}
@@ -490,6 +506,17 @@ class ValidateSpecsTest(unittest.TestCase):
 
         self.assertIn("default", str(caught.exception))
         self.assertIn("fcm_xrpl", str(caught.exception))
+
+    def test_an_alias_that_cannot_be_an_environment_variable_raises(self):
+        """VS-09 — an alias that is not a valid environment-variable name."""
+        for alias in ("my-alias", "my alias", "2fast", "alias!"):
+            with self.assertRaises(SpecValidationError, msg=alias):
+                validate_specs([AliasSpec(app_label="app", alias=alias)])
+
+        for alias in ("ai_memory", "xrpl", "messagebus2"):
+            self.assertIsNone(
+                validate_specs([AliasSpec(app_label="app", alias=alias)]), alias
+            )
 
     def test_every_problem_is_reported_in_one_raise(self):
         """VS-08 — several problems at once produce one raise, naming all."""
@@ -1110,6 +1137,19 @@ class ConfigureTest(unittest.TestCase):
 
         self.assertEqual(databases["one"]["CONN_MAX_AGE"], 300)
 
+    def test_a_consumers_own_routers_are_kept(self):
+        """CF-16 — theirs are preserved, ours appended after."""
+        apps = [self.app("cf16_app", app_label="cf16_app", alias="xrpl")]
+        theirs = ["world.routers.MyRouter"]
+
+        _, routers = configure(
+            self.game_databases(), apps, GAME_DIR, {}, routers=theirs
+        )
+
+        self.assertEqual(routers[0], "world.routers.MyRouter")
+        self.assertIsInstance(routers[1], CascadeRouter)
+        self.assertEqual(theirs, ["world.routers.MyRouter"])
+
     def test_session_options_default_to_empty_and_reach_every_entry(self):
         """CF-15 — default_session_options defaults to empty."""
         apps = [
@@ -1285,13 +1325,28 @@ class MigrateAllTest(unittest.TestCase):
         self.apps = AppTree()
         self.addCleanup(self.apps.teardown)
         self.calls = []
+        # alias -> the extensions that database reports as installed.
+        self.installed = {}
+        # alias -> engine, so a case can make one non-Postgres.
+        self.engines = {}
 
         def record(*args, **options):
             self.calls.append((args, options))
 
-        patch = mock.patch.object(migrate_module, "call_command", record)
-        patch.start()
-        self.addCleanup(patch.stop)
+        def installed_extensions(alias):
+            if "postgresql" not in self.engines.get(alias, "postgresql"):
+                return None
+            return set(self.installed.get(alias, ()))
+
+        patches = [
+            mock.patch.object(migrate_module, "call_command", record),
+            mock.patch.object(
+                migrate_module, "installed_extensions", installed_extensions
+            ),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def app(self, name, **spec_fields):
         """An app declaring a real AliasSpec."""
@@ -1382,6 +1437,76 @@ class MigrateAllTest(unittest.TestCase):
             migrate_all([app], {"GAME_DATABASE_URL": COMMON_URL})
 
         self.assertEqual(self.aliases_migrated(), [])
+
+    def test_migrations_run_when_every_extension_is_present(self):
+        """MG-11 — nothing missing, so the migrations run normally."""
+        app = self.app(
+            "mg11_app",
+            app_label="mg11_app",
+            alias="ai_memory",
+            required_extensions=("vector",),
+        )
+        self.installed["ai_memory"] = ("vector",)
+
+        migrate_all([app], {})
+
+        self.assertEqual(self.aliases_migrated(), ["ai_memory"])
+
+    def test_a_missing_extension_refuses_before_any_migration(self):
+        """MG-12 — raises first, naming the extension and the command."""
+        app = self.app(
+            "mg12_app",
+            app_label="mg12_app",
+            alias="ai_memory",
+            required_extensions=("vector",),
+        )
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            migrate_all([app], {})
+
+        message = str(caught.exception)
+        self.assertIn("vector", message)
+        self.assertIn("ai_memory", message)
+        self.assertIn("CREATE EXTENSION", message)
+        self.assertEqual(self.calls, [])
+
+    def test_every_missing_extension_is_reported_together(self):
+        """MG-13 — several missing across aliases: one raise, naming all."""
+        apps = [
+            self.app(
+                "mg13_one",
+                app_label="mg13_one",
+                alias="one",
+                required_extensions=("vector",),
+            ),
+            self.app(
+                "mg13_two",
+                app_label="mg13_two",
+                alias="two",
+                required_extensions=("postgis",),
+            ),
+        ]
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            migrate_all(apps, {})
+
+        message = str(caught.exception)
+        self.assertIn("vector", message)
+        self.assertIn("postgis", message)
+
+    def test_the_check_is_skipped_on_a_non_postgres_alias(self):
+        """MG-14 — there are no extensions to have on SQLite."""
+        app = self.app(
+            "mg14_app",
+            app_label="mg14_app",
+            alias="xrpl",
+            required_extensions=("vector",),
+        )
+        self.engines["xrpl"] = "django.db.backends.sqlite3"
+
+        migrate_all([app], {})
+
+        self.assertEqual(self.aliases_migrated(), ["xrpl"])
 
     def test_the_command_calls_migrate_all(self):
         """MG-09 — the management command is a wrapper, not a second path."""

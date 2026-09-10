@@ -5,10 +5,13 @@ decided by the environment rather than by editing settings.
 
 ## Status
 
-**Complete and unproven.** Every piece is built — discovery, the spec, validation, the resolver, the
-router, `configure()`, the boot check and `evennia cascade_migrate` — with 101 tests behind them. No
-consumer game runs it yet and nothing is published, so it has never resolved a database outside its
-own suite. See [docs/progress.md](docs/progress.md).
+**Complete, and exercised once end to end.** Every piece is built — discovery, the spec, validation,
+the resolver, the router, `configure()`, the boot check and `evennia cascade_migrate` — with 126
+tests behind them, and a demo gamedir in [examples/](examples/) that runs the whole thing against a
+real `django.setup()`.
+
+No real consumer runs it yet, nothing is published, and no rung has been exercised against Postgres.
+See [docs/progress.md](docs/progress.md).
 
 ## The problem it solves
 

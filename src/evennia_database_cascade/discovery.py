@@ -29,7 +29,12 @@ the package ``__init__.py``, which is the first file a consumer's
 
 import importlib
 
-from .config import SPEC_ATTRIBUTE, SPEC_MODULE_NAME
+from .config import (
+    ALIAS_URL_PREFIX,
+    ENVIRONMENT_NAME,
+    SPEC_ATTRIBUTE,
+    SPEC_MODULE_NAME,
+)
 
 
 class MissingAppError(ImportError):
@@ -229,6 +234,14 @@ def validate_specs(specs):
                 f"game's database with this library's. Choose an alias of "
                 f"its own."
             )
+        elif not ENVIRONMENT_NAME.match(spec.alias):
+            problems.append(
+                f"{spec.app_label} declares the alias {spec.alias!r}, which "
+                f"cannot name an environment variable. The alias becomes "
+                f"{ALIAS_URL_PREFIX}<ALIAS>, so use letters, digits and "
+                f"underscores only, and do not start with a digit."
+            )
+
         if not spec.app_label.strip():
             problems.append(
                 f"The spec for alias {spec.alias!r} declares an empty "

@@ -50,6 +50,10 @@ class AliasSpec:
             pairs and appended to whatever the URL already put in
             ``OPTIONS``. Left alone, the game-wide value applies. Skipped on
             SQLite, where ``OPTIONS`` means something else entirely.
+        required_extensions (tuple): Postgres extensions this alias's
+            database must already have, by name. Checked before migrations
+            run and only reported on — creating one needs superuser, which
+            an application role deliberately is not.
 
     The two ``allow_`` fields are the inbound and outbound halves of the same
     question — whether this alias may go into someone else's database, and
@@ -68,6 +72,7 @@ class AliasSpec:
     allow_foreign_tables_in_own_db: bool = False
     conn_max_age: object = UNSET
     session_options: object = UNSET
+    required_extensions: tuple = ()
 
     def __post_init__(self):
         # Derived rather than defaulted in the signature, because the default

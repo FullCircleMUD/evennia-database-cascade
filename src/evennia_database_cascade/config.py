@@ -14,6 +14,7 @@ can, at the point it runs. What a consumer configures arrives as arguments to
 ``log.py``'s two constants are the standing exemption and stay there.
 """
 
+import re
 from importlib.metadata import packages_distributions, requires
 
 # The prefix on the variable naming a database of one alias's own. The alias,
@@ -53,6 +54,10 @@ DEFAULT_CONN_MAX_AGE = 0
 # FullCircleMUD needs, hnsw.iterative_scan, belongs to whichever library
 # stores vectors. Never mutated: every entry is rendered into a fresh string.
 DEFAULT_SESSION_OPTIONS = {}
+
+# What a shell can export. An alias is upper-cased onto ALIAS_URL_PREFIX to
+# name a variable, so an alias failing this is one nobody can deploy.
+ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # The module a library ships to declare its alias, found under its app.
 SPEC_MODULE_NAME = "db_spec"

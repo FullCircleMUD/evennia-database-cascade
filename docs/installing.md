@@ -38,7 +38,7 @@ SPEC = AliasSpec(
 )
 ```
 
-Two fields are required and five have defaults:
+Two fields are required and six have defaults:
 
 | Field | Default | What it says |
 |---|---|---|
@@ -49,6 +49,7 @@ Two fields are required and five have defaults:
 | `allow_foreign_tables_in_own_db` | `False` | May another app's tables be migrated into this alias's database? |
 | `conn_max_age` | the game's | How long this alias's connection is kept before being closed. Left alone, the value passed to `configure()` applies |
 | `session_options` | the game's | Postgres session parameters for this alias, as `{name: value}`. Left alone, the value passed to `configure()` applies |
+| `required_extensions` | none | Postgres extensions the database behind this alias must already have, by name |
 
 The two `allow_` fields are the outbound and inbound halves of the same question, and they are
 independent — a library can want either, both or neither.
@@ -78,6 +79,19 @@ It scans `INSTALLED_APPS` for apps declaring a spec, validates the set, resolves
 returns `DATABASES` with those entries filled in and `DATABASE_ROUTERS` holding a router for exactly
 the aliases that need one. Your `default` entry is untouched, and the dict you passed in is not
 modified — the return is a copy.
+
+**If you already have routers of your own**, hand them over so they survive:
+
+```python
+DATABASE_ROUTERS = ["world.routers.MyRouter"]
+
+DATABASES, DATABASE_ROUTERS = configure(
+    DATABASES, INSTALLED_APPS, GAME_DIR, os.environ, routers=DATABASE_ROUTERS
+)
+```
+
+Yours stay at the front and ours are appended. Leave the argument off and the return replaces the
+list, which is fine when it held nothing and a silent loss when it did.
 
 **Order matters and nothing can check it.** A spec belonging to an app added below this line is not
 there to be found. Keep the call at the end of the database section of your settings.
@@ -115,6 +129,12 @@ evennia cascade_migrate
 It runs a bare `migrate`, then `migrate --database <alias>` for every alias on a database of its own,
 and reports which those were. Options are forwarded, so `--verbosity 2` and `--noinput` work as
 usual.
+
+**Before any of that it checks required extensions**, across every alias, and refuses if one is
+missing — naming the extension, the database, and the `CREATE EXTENSION` command to run. It only
+reports: creating an extension needs superuser, which an application role deliberately is not. The
+refusal comes first because a migration creating a column of that type fails halfway rather than
+cleanly.
 
 Doing it by hand is the same two steps:
 

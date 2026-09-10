@@ -99,16 +99,22 @@ Validation moved to `validate_specs`, which has its own `VS` section in the real
 
 Not attached to a case, because the behaviour has not been agreed. Each becomes cases when it is.
 
-- **Is the alias fixed by the declaring library, or overridable by the consumer?** Fixed keeps the
-  environment variable name predictable. Overridable is what two libraries choosing the same alias
-  would need — and decides whether a collision is refused, and by whom.
+- ~~**Is the alias fixed by the declaring library, or overridable by the consumer?**~~ Settled, and
+  narrower than it sounded. **A spec is fixed input as far as this library is concerned** — we read
+  what the declaring library declared and add no mechanism for anyone else to change it. Whether that
+  library lets its own consumers influence what it puts in its spec is that library's business, and
+  it needs nothing from us: it can read whatever setting it likes and build its spec from the answer.
+  A collision between two libraries is refused loudly — `VS-03` — and stays refused until one of them
+  changes.
 - ~~**How does a spec say the middle rung does not apply to it?**~~ Settled: `allow_sharing_common_db`,
   refusing that rung rather than falling through to SQLite. Cases `RS-09` to `RS-11`.
 - ~~**Does `configure()` also resolve `default`?**~~ Settled: it does not. `default` is the one entry
   Evennia already provides, and owning it would mean owning an edge case that is not this library's.
   Case `CF-02`.
-- **Does a spec carry connection knobs?** `CONN_MAX_AGE` and the Postgres session options were agreed
-  to be configurable rather than constants, with `fcm-xrpl`'s `XRPL_CONN_MAX_AGE` as the precedent.
-  Whether they sit on the spec, and what the defaults are, is not settled.
-- **What happens to a router the consumer added themselves?** `configure()` returns a list built from
-  the specs. Whether it preserves entries already in `DATABASE_ROUTERS` was not discussed.
+- ~~**Does a spec carry connection knobs?**~~ Settled: both do — `conn_max_age` and
+  `session_options`, each defaulting to the `UNSET` sentinel. `configure()` carries the game-wide
+  default for aliases whose spec said nothing. Cases `SP-11` to `SP-14`, `RS-13` to `RS-20`,
+  `CF-14`, `CF-15`.
+- ~~**What happens to a router the consumer added themselves?**~~ Settled: preserved. `configure()`
+  takes a `routers` argument and appends ours after theirs, because replacing the list would drop a
+  router they wrote and send whatever it routed to `default` silently. Case `CF-16`.

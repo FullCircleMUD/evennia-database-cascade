@@ -30,11 +30,13 @@ itself. Adopting this library means deleting that block and its router class in 
 rewriting the `DATABASE_ROUTERS` instructions in its README, which today tell a consumer to append
 the router unconditionally.
 
-Its alias is the one carrying vector columns, so whatever answer the pgvector extension check gets is
-answered on its behalf.
+Its alias is the one carrying vector columns, and its spec is the one that will declare
+`required_extensions=("vector",)`. `evennia cascade_migrate` reads that and refuses before migrating
+if the database does not have the extension, naming the `CREATE EXTENSION` command to run — creating
+one needs superuser, which an application role deliberately is not.
 
-`[TBD — needs discussion: whether a spec carries a "needs pgvector" marker so a deploy script stops
-naming ai_memory directly, or whether that check stays with the consumer.]`
+That is what retires the hardcoded `_VECTOR_ALIASES = ("ai_memory",)` in FCM's `deploy_migrate.py`:
+once ai-memory declares it, the library that knows it needs the extension is the one that says so.
 
 ## evennia-archive
 

@@ -89,6 +89,8 @@ installing a library, not by us, and each is a permission rather than a state.
 | SP-12 | A spec that sets `conn_max_age` keeps the value, `None` included. `None` is a real Django value — persist the connection forever — which is why the sentinel cannot be `None` | `test_a_spec_keeps_the_conn_max_age_it_was_given` |
 | SP-13 | `session_options` defaults to the `UNSET` sentinel, meaning the spec says nothing | `test_session_options_say_nothing_by_default` |
 | SP-14 | A spec that sets `session_options` keeps the mapping it was given | `test_a_spec_keeps_the_session_options_it_was_given` |
+| SP-15 | `required_extensions` defaults to empty | `test_required_extensions_are_empty_by_default` |
+| SP-16 | A spec that declares extensions keeps them | `test_a_spec_keeps_the_extensions_it_declared` |
 
 ## VS — `validate_specs(specs)`
 
@@ -111,6 +113,7 @@ SQLite — on Postgres there is no file to collide with.
 | VS-06 | An empty or whitespace-only `app_label` raises | `test_an_empty_app_label_raises` |
 | VS-07 | An alias of `"default"` raises. Django's implicit alias cannot be renamed, so the literal string is exact rather than a guess — and a spec claiming it would replace the game's own connection | `test_an_alias_of_default_raises` |
 | VS-08 | Several problems at once produce one raise, naming all of them | `test_every_problem_is_reported_in_one_raise` |
+| VS-09 | An alias that is not a valid environment-variable name raises — a hyphen, a space, a leading digit. The alias becomes `DATABASE_URL_<ALIAS>`, so one no shell can export is an alias nobody can deploy | `test_an_alias_that_cannot_be_an_environment_variable_raises` |
 
 ## RS — `resolve_database(spec, game_dir, env, common_url_var)`
 
@@ -232,6 +235,7 @@ principle 8 in [CLAUDE.md](../CLAUDE.md). Failures raise, and the traceback is t
 | CF-13 | That check fires only where `default` is SQLite. A Postgres `default` alongside an alias on SQLite is not a collision, and there is no file to compare | `test_a_postgres_default_alongside_sqlite_is_not_a_collision` |
 | CF-14 | `default_conn_max_age` defaults to `0` and reaches every entry. Zero closes the connection at the end of each unit of work, which is the safe end of the scale and what a Twisted deployment needs — FCM reached its Postgres connection limit before setting it | `test_conn_max_age_defaults_to_zero_and_reaches_every_entry` |
 | CF-15 | `default_session_options` defaults to empty and reaches every entry | `test_session_options_default_to_empty_and_reach_every_entry` |
+| CF-16 | Routers the consumer already had are kept, with ours appended after. Overwriting the list would drop a router they wrote and send whatever it routed to `default`, silently. Theirs first, because Django takes the first non-`None` answer and an explicit choice of theirs should win over ours | `test_a_consumers_own_routers_are_kept` |
 
 ## BC — `check_settings()`, the boot check
 
@@ -284,6 +288,13 @@ Options are forwarded to Django's `migrate` untouched, so a consumer keeps `--ve
 `--noinput`. `database` is the exception: the helper decides that per call, and a caller supplying it
 would be fighting the thing the helper is for.
 
+**Required extensions are checked first, across every alias**, including the ones sharing the game's
+database — a shared alias's extension lives on the common database and needs checking too. The check
+only reports: creating an extension needs superuser and the application role deliberately is not one,
+so the raise carries the command for a human to run. It refuses before the bare `migrate`, because a
+migration that creates a vector column against a database without the extension fails halfway rather
+than cleanly.
+
 `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, this library's only setting — read through an
 accessor in `config.py`, defaulting to `DATABASE_URL`. It exists because the value has to be known in
 two processes: the consumer passes it to `configure()` from their settings module, and the helper
@@ -301,6 +312,10 @@ reads it back from the same place.
 | MG-08 | `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, defaulting to `DATABASE_URL` | `test_the_common_variable_comes_from_the_setting` |
 | MG-09 | The management command calls `migrate_all`, so the two cannot drift | `test_the_command_calls_migrate_all` |
 | MG-10 | Options are forwarded to `migrate` untouched, and a caller-supplied `database` is refused rather than silently overridden | `test_options_are_forwarded_and_database_is_refused` |
+| MG-11 | Every required extension present — the migrations run normally | `test_migrations_run_when_every_extension_is_present` |
+| MG-12 | One missing raises **before any migration runs**, naming the extension, the database it is missing from, and the `CREATE EXTENSION` command to run | `test_a_missing_extension_refuses_before_any_migration` |
+| MG-13 | Several missing, across aliases — one raise naming all of them | `test_every_missing_extension_is_reported_together` |
+| MG-14 | Skipped on a non-Postgres alias, where there are no extensions to have | `test_the_check_is_skipped_on_a_non_postgres_alias` |
 
 ## LG — `cascade_log`
 

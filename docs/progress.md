@@ -3,6 +3,47 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-10 — Proved end to end, stopped pretending to log, and made the knobs configurable
+
+126 tests. The design questions are closed; what is left is verification and the retrofits.
+
+**A demo gamedir now exercises the whole thing** against a real `django.setup()`. Two consumers
+deliberately: `demo_library`, a throwaway distribution declaring this library as a dependency, which
+is the only way to reach the boot check's `Requires-Dist` path; and `demo_game`'s own app, which is
+not a distribution and therefore cannot. After `cascade_migrate`, `evennia.db3` held 42 tables with
+neither demo table among them, against one each in `demolib.db3` and `demogame.db3`.
+
+It found two things reasoning had not. **Evennia's own `INSTALLED_APPS` carries AppConfig paths** —
+`evennia.web.utils.adminsite.EvenniaAdminApp` — not only package names, and treating one as a missing
+app killed `django.setup()` on a stock gamedir. Entries now drop trailing segments until they reach a
+package. Case `DS-12`.
+
+**And the logging shim raises before `django.setup()`.** `logger.log_file` writes through
+`deferToThread`, which needs a running reactor, and every part of this library works before one
+exists. A call opened the file and wrote nothing — a 0-byte `cascade.log`. The four call sites are
+gone, `BC-10`, `BC-11` and `MG-07` are retired for asserting a feature the library does not have, and
+`log.py` stays verbatim and uncalled with the reasoning in its docstring. Principle 8.
+
+**Both connection knobs are configurable, defaulted by the game and overridable per alias.**
+`conn_max_age` and `session_options`, each defaulting to an `UNSET` sentinel on the spec — `None`
+could not be the sentinel, because Django reads it as *persist forever*. `configure()` carries the
+game-wide default for aliases whose spec said nothing, which is the consumer's only lever over an
+alias belonging to a library they did not write. Session options render to `-c name=value` and are
+appended to whatever the URL put in `OPTIONS`, so a `?sslmode=require` survives. Cases `SP-11` to
+`SP-14`, `RS-13` to `RS-20`, `CF-14`, `CF-15`.
+
+**`required_extensions` refuses a migration against a database missing what it needs**, across every
+alias rather than only the split ones — a shared alias's extension lives on the common database too.
+It only reports: creating an extension needs superuser, so the message carries the command. That is
+what retires the hardcoded `_VECTOR_ALIASES` tuple in FCM's deploy script. Cases `SP-15`, `SP-16`,
+`MG-11` to `MG-14`.
+
+**Two smaller corrections.** A consumer's own routers were being replaced rather than appended to,
+which would have dropped a router they wrote and sent whatever it routed to `default` silently —
+`configure()` now takes them and puts ours after. And an alias that cannot name an environment
+variable is refused, since the alias *becomes* `DATABASE_URL_<ALIAS>` and one no shell can export is
+one nobody can deploy. Cases `CF-16` and `VS-09`.
+
 ## 2026-09-08 — The rest of it: resolution, routing, configure, boot and migrate
 
 101 tests. Every piece is built; no consumer game runs it yet.
