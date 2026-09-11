@@ -65,6 +65,8 @@ with the unit that needs them.
 | DS-10 | A dotted app name works the same as a flat one. Free today — the case exists so a later change cannot quietly assume a flat name | `test_a_dotted_app_name_resolves_like_a_flat_one` |
 | DS-11 | An app that cannot be imported at all raises `MissingAppError`, not `SpecImportError` — a different fault with a different message, chained to the original | `test_an_app_that_does_not_exist_raises_its_own_error` |
 | DS-12 | An `INSTALLED_APPS` entry naming an AppConfig class resolves to its package. Django accepts both forms and Evennia ships `evennia.web.utils.adminsite.EvenniaAdminApp` in its own defaults, so treating one as a missing app kills `django.setup()` on a stock gamedir | `test_an_appconfig_path_resolves_to_its_package` |
+| DS-13 | A `db_spec` whose import fails is logged at ERROR before `SpecImportError` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_a_broken_db_spec_is_logged_before_the_raise` |
+| DS-14 | An app that cannot be imported is logged at ERROR before `MissingAppError` raises, same shape as DS-13 | `test_a_missing_app_is_logged_before_the_raise` |
 
 ## SP — `AliasSpec`
 
@@ -113,6 +115,7 @@ SQLite — on Postgres there is no file to collide with.
 | VS-07 | An alias of `"default"` raises. Django's implicit alias cannot be renamed, so the literal string is exact rather than a guess — and a spec claiming it would replace the game's own connection | `test_an_alias_of_default_raises` |
 | VS-08 | Several problems at once produce one raise, naming all of them | `test_every_problem_is_reported_in_one_raise` |
 | VS-09 | An alias that is not a valid environment-variable name raises — a hyphen, a space, a leading digit. The alias becomes `DATABASE_URL_<ALIAS>`, so one no shell can export is an alias nobody can deploy | `test_an_alias_that_cannot_be_an_environment_variable_raises` |
+| VS-10 | An invalid spec set is logged at ERROR before `SpecValidationError` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_an_invalid_spec_set_is_logged_before_the_raise` |
 
 ## RS — `resolve_database(spec, game_dir, env, common_url_var)`
 
@@ -144,6 +147,7 @@ SQLite falls to `<game_dir>/server/`, which is where Evennia puts every database
 | RS-18 | A spec's own `session_options` overrides the game-wide default, for that alias only | `test_a_spec_overrides_the_game_wide_session_options` |
 | RS-19 | Appended to whatever `OPTIONS` the URL already produced, rather than replacing it — a `?sslmode=require` in the URL survives a library setting a parameter of its own | `test_session_options_are_appended_to_what_the_url_produced` |
 | RS-20 | Skipped entirely on a SQLite entry. Unlike `conn_max_age` this one does need a branch on engine: `OPTIONS` means something else there, and a libpq string breaks the connection outright | `test_session_options_are_skipped_on_sqlite` |
+| RS-21 | A refused shared alias is logged at ERROR before `SharedDatabaseRefused` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_a_refused_shared_alias_is_logged_before_the_raise` |
 
 ## SL — `is_split(alias, env, common_url_var)` and `split_aliases(specs, env, common_url_var)`
 
@@ -220,7 +224,8 @@ rather than two. Without it the aliases move and the game does not, which on Pos
 quietly on SQLite while its libraries are on the server, and on SQLite creates an empty file nothing
 will ever migrate. `CF-18` is the assertion that catches it.
 
-Nothing here logs. Failures raise, and the traceback is the record.
+Failures raise, and the traceback is the record; each refusal also lands in `cascade.log` at ERROR
+with the same text, and a clean run logs where each alias landed.
 
 | ID | Case | Test function |
 |---|---|---|
@@ -246,6 +251,8 @@ Nothing here logs. Failures raise, and the traceback is the record.
 | CF-21 | A `default` the consumer wrote themselves is **replaced** when a common URL is set. Deliberate, and pinned so it is not later "fixed" into a merge or a skip-if-present | `test_a_consumer_set_default_is_replaced_by_the_common_url` |
 | CF-22 | An alias sharing the game's database **through the common URL** is not a collision — that is the arrangement, not a mistake. The check applies to split aliases only, which is what keeps CF-12 meaningful without refusing rung 2 outright | `test_sharing_the_game_database_through_the_common_url_is_not_a_collision` |
 | CF-16 | Routers the consumer already had are kept, with ours appended after. Overwriting the list would drop a router they wrote and send whatever it routed to `default`, silently. Theirs first, because Django takes the first non-`None` answer and an explicit choice of theirs should win over ours | `test_a_consumers_own_routers_are_kept` |
+| CF-23 | A split alias landing on the game database file is logged at ERROR before `GameDatabaseCollision` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_a_game_database_collision_is_logged_before_the_raise` |
+| CF-24 | A successful `configure()` writes one INFO line naming each alias and where it landed — read back from disk | `test_a_successful_configure_logs_where_each_alias_landed` |
 
 ## BC — `check_settings()`, the boot check
 
@@ -276,8 +283,8 @@ goes inside the function, so `config.py` stays importable from a settings module
 | BC-07 | An app with a `db_spec` whose alias is absent — raises, naming the app and the alias | `test_a_declared_alias_missing_from_databases_is_refused` |
 | BC-08 | Two such apps — one raise, naming both | `test_two_missing_aliases_are_reported_together` |
 | BC-09 | Both kinds of problem at once — one raise, naming all of them | `test_both_kinds_of_problem_are_reported_together` |
-| BC-10 | **Retired.** Asserted a log line on a clean run; the case passed only because the shim was mocked | — |
-| BC-11 | **Retired.** Asserted a refusal was logged before being raised. Same reason as BC-10 | — |
+| BC-10 | A clean run writes an INFO line to `cascade.log` — asserted by reading the file back from disk, never by mocking the shim | `test_a_clean_run_writes_an_info_line_to_disk` |
+| BC-11 | A refusal is logged to `cascade.log` at ERROR before the raise, carrying the same problem text as the exception — read back from disk, never mocked | `test_a_refusal_is_logged_to_disk_before_the_raise` |
 | BC-12 | `ready()` calls the check, so it cannot be defined and never run | `test_ready_calls_the_check` |
 
 ## MG — `migrate_all()` and `evennia cascade_migrate`
@@ -315,7 +322,7 @@ reads it back from the same place.
 | MG-04 | The split set comes from `split_aliases`, not a second derivation of the same rule | `test_the_split_set_comes_from_split_aliases` |
 | MG-05 | An unsplit alias never gets its own call — the bare migrate already covered it | `test_an_unsplit_alias_never_gets_its_own_call` |
 | MG-06 | A failing migrate propagates rather than being swallowed | `test_a_failing_migrate_propagates` |
-| MG-07 | **Retired.** Asserted a log line naming what was migrated; the command's own stdout is the record | — |
+| MG-07 | **Retired.** Asserted a log line naming what was migrated, but passed only because the shim was mocked — MG-16 is the live case | — |
 | MG-08 | `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, defaulting to `DATABASE_URL` | `test_the_common_variable_comes_from_the_setting` |
 | MG-09 | The management command calls `migrate_all`, so the two cannot drift | `test_the_command_calls_migrate_all` |
 | MG-10 | Options are forwarded to `migrate` untouched, and a caller-supplied `database` is refused rather than silently overridden | `test_options_are_forwarded_and_database_is_refused` |
@@ -323,4 +330,6 @@ reads it back from the same place.
 | MG-12 | One missing raises **before any migration runs**, naming the extension, the database it is missing from, and the `CREATE EXTENSION` command to run | `test_a_missing_extension_refuses_before_any_migration` |
 | MG-13 | Several missing, across aliases — one raise naming all of them | `test_every_missing_extension_is_reported_together` |
 | MG-14 | Skipped on a non-Postgres alias, where there are no extensions to have | `test_the_check_is_skipped_on_a_non_postgres_alias` |
+| MG-15 | A missing-extension refusal is logged at ERROR before `ImproperlyConfigured` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_a_missing_extension_refusal_is_logged_before_the_raise` |
+| MG-16 | A successful `migrate_all` writes one INFO line naming the bare migrate and each split alias migrated — read back from disk | `test_a_successful_migrate_logs_what_was_migrated` |
 

@@ -254,4 +254,6 @@ Every failure raises, and every failure is fatal — a bad spec or a refused ali
 settings module, the boot check stops `django.setup()`, and a failed migration stops the command.
 The exception and its traceback are the record, and they are already in front of you.
 
-Nothing writes to `cascade.log` yet — `cascade_log` has no call sites.
+The same story lands in `server/logs/cascade.log`: every refusal at ERROR with the exception's
+text, and one INFO line from a clean `configure()`, boot check and migrate — so the file answers
+"what happened at boot" after the console is gone.

@@ -3,6 +3,27 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-11 — The refusal paths log
+
+136 tests. Every refusal logs at ERROR before it raises — the log line and the exception carry the
+same text, so the file and the console tell one story — and each public call logs one INFO line on
+success: `configure()` names where each alias landed, `check_settings()` the clean boot,
+`migrate_all()` what was migrated. Cases DS-13/14, VS-10, RS-21, CF-23/24, BC-10/11 and MG-15/16,
+all asserting delivery by reading `cascade.log` back from disk, never by mocking the shim.
+
+Two deliberate silences: the `TypeError` for a caller-supplied `database` option (a programming
+error, not an operational event) and `CascadeRouter` (hot path, nothing to report).
+
+**Proven live in the demo gamedir.** One clean boot writes the `configured aliases:` line and then a
+`boot check passed:` line from each of the three Django processes — launcher, portal, server — all
+in `server/logs/cascade.log`, Evennia's format, no stray files.
+
+**One observation, belonging to `evennia-logging-extension`:** the portal and server (twistd child
+processes) lose their settings-window `configure()` line — it reaches neither `cascade.log` nor
+`pre-startup.log`; only the launcher's landed. Lines written after `django.setup()` land from every
+process. The launcher runs the same settings first, so a settings-window refusal is still recorded
+once per boot. To be raised with the extension; nothing in this library to fix.
+
 ## 2026-09-10 — Logging converted to evennia-logging-extension
 
 126 tests. `log.py` is the standard three-line binding — `cascade_log = make_logger("cascade.log")`
@@ -15,7 +36,7 @@ active exception, both landed in `server/logs/cascade.log` in Evennia's format, 
 
 **Nothing calls `cascade_log` yet** — the linter's one warning (`log_shim_unused`) stands until the
 call sites are agreed. The refusal paths are the obvious candidates: log at ERROR before the raise,
-same text in both channels. [TBD — needs discussion: which sites should log.]
+same text in both channels. (Resolved in the entry above.)
 
 ## 2026-09-10 — All three rungs proven live, and two defects the unit tests could not see
 

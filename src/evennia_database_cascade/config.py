@@ -155,6 +155,7 @@ def check_settings(installed_apps=None, databases=None):
     from django.core.exceptions import ImproperlyConfigured
 
     from .discovery import discover_specs
+    from .log import cascade_log
 
     if installed_apps is None:
         installed_apps = get_installed_apps()
@@ -182,7 +183,16 @@ def check_settings(installed_apps=None, databases=None):
             )
 
     if problems:
-        raise ImproperlyConfigured(" ".join(problems))
+        # One message, both channels: the log line and the exception carry
+        # the same text, so the file and the console tell one story.
+        message = " ".join(problems)
+        cascade_log(message, level="ERROR")
+        raise ImproperlyConfigured(message)
+
+    cascade_log(
+        f"boot check passed: {len(specs)} spec(s) declared, "
+        f"every alias in DATABASES"
+    )
 
 
 def _depends_on_us(app):

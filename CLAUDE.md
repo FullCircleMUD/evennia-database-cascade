@@ -67,7 +67,10 @@ Agreed in the design conversation of 2026-09-08. Every implementation decision m
    migrations as applied, leaving a database that looks migrated and holds nothing.
 8. **Logging binds through `evennia-logging-extension`.** `log.py` is the standard three-line
    binding — `cascade_log = make_logger("cascade.log")` — which writes with or without a reactor,
-   so every part of this library can log. Nothing calls it yet.
+   so every part of this library can log. Every refusal logs at ERROR before it raises, the log
+   line and the exception carrying the same text; `configure()`, `check_settings()` and
+   `migrate_all()` each log one INFO line on success. `CascadeRouter` stays silent — hot path,
+   nothing to report.
 9. **`INSTALLED_APPS` is the consumer's, and unvalidatable.** A library left out of it never has its
    `ready()` run, so nothing of ours can notice. Everything after that point is validated as hard as
    it can be — spec fields when `configure()` runs, and the presence cross-check at boot.

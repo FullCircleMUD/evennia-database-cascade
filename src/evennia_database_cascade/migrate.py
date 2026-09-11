@@ -91,7 +91,11 @@ def _refuse_missing_extensions(specs):
             )
 
     if problems:
-        raise ImproperlyConfigured(" ".join(problems))
+        message = " ".join(problems)
+        from .log import cascade_log
+
+        cascade_log(message, level="ERROR")
+        raise ImproperlyConfigured(message)
 
 
 def migrate_all(installed_apps=None, env=None, **options):
@@ -138,5 +142,10 @@ def migrate_all(installed_apps=None, env=None, **options):
     call_command("migrate", **options)
     for alias in split:
         call_command("migrate", database=alias, **options)
+
+    from .log import cascade_log
+
+    own = ", ".join(split) or "none"
+    cascade_log(f"migrated: the game database, then on their own: {own}")
 
     return split

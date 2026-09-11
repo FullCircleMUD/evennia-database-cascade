@@ -120,12 +120,16 @@ def discover_specs(installed_apps):
             # Python this is indistinguishable from the line above, so the
             # library would drop the app, leave its alias unconfigured, and
             # let its tables fall through to `default` with nothing said.
-            raise SpecImportError(
+            message = (
                 f"{app} ships a {module_name}, and importing it failed: it "
                 f"imports {err.name!r}, which could not be found. Fix that "
                 f"import — until it works, {app} has no database alias "
                 f"configured and its tables will land in the game database."
-            ) from err
+            )
+            from .log import cascade_log
+
+            cascade_log(message, level="ERROR")
+            raise SpecImportError(message) from err
         specs.append(getattr(module, SPEC_ATTRIBUTE))
     return specs
 
@@ -149,6 +153,9 @@ def _refuse_the_missing_app(app):
         f"be found. Check the name for a typo, and that the package is "
         f"installed."
     )
+    from .log import cascade_log
+
+    cascade_log(message, level="ERROR")
     try:
         importlib.import_module(app)
     except ImportError as err:
@@ -265,7 +272,11 @@ def validate_specs(specs):
         )
 
     if problems:
-        raise SpecValidationError(" ".join(problems))
+        message = " ".join(problems)
+        from .log import cascade_log
+
+        cascade_log(message, level="ERROR")
+        raise SpecValidationError(message)
 
 
 def _sharing(specs, attribute):

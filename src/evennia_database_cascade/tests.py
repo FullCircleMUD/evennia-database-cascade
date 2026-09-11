@@ -194,6 +194,34 @@ class AppTree:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
+def clear_logs():
+    """Empty LOG_DIR's files so a line read back was written by this test.
+
+    Truncated, never removed: Evennia's ``_open_log_file`` caches the handle
+    after the first write, and removing the file leaves that handle appending
+    to an unlinked inode — every later line silently vanishes. An append-mode
+    handle seeks to the end on each write, so a truncated file stays live.
+    """
+    from django.conf import settings
+
+    for name in os.listdir(settings.LOG_DIR):
+        if name.endswith(".log"):
+            with open(os.path.join(settings.LOG_DIR, name), "w"):
+                pass
+
+
+def read_back_logs():
+    """Every line in LOG_DIR's files, as one string."""
+    from django.conf import settings
+
+    text = []
+    for name in sorted(os.listdir(settings.LOG_DIR)):
+        if name.endswith(".log"):
+            with open(os.path.join(settings.LOG_DIR, name)) as handle:
+                text.append(handle.read())
+    return "\n".join(text)
+
+
 class DiscoverSpecsTest(unittest.TestCase):
     """discover_specs — finding the specs the installed apps declare."""
 
@@ -309,6 +337,29 @@ class DiscoverSpecsTest(unittest.TestCase):
         self.assertIn("ds11_no_such_app", message)
         self.assertIn("INSTALLED_APPS", message)
         self.assertIsInstance(caught.exception.__cause__, ModuleNotFoundError)
+
+    def test_a_broken_db_spec_is_logged_before_the_raise(self):
+        """DS-13 — the log line and the exception carry the same text."""
+        clear_logs()
+        self.apps.add("ds13_app", BROKEN_IMPORT_SPEC_MODULE)
+
+        with self.assertRaises(SpecImportError) as caught:
+            discover_specs(["ds13_app"])
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
+
+    def test_a_missing_app_is_logged_before_the_raise(self):
+        """DS-14 — same shape as DS-13, for MissingAppError."""
+        clear_logs()
+
+        with self.assertRaises(MissingAppError) as caught:
+            discover_specs(["ds14_no_such_app"])
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
 
 
 class AliasSpecTest(unittest.TestCase):
@@ -533,6 +584,21 @@ class ValidateSpecsTest(unittest.TestCase):
         self.assertIn("shared", message)
         self.assertIn("nameless_app", message)
         self.assertIn("library_four", message)
+
+    def test_an_invalid_spec_set_is_logged_before_the_raise(self):
+        """VS-10 — the log line and the exception carry the same text."""
+        clear_logs()
+        specs = [
+            AliasSpec(app_label="library_one", alias="shared"),
+            AliasSpec(app_label="library_two", alias="shared"),
+        ]
+
+        with self.assertRaises(SpecValidationError) as caught:
+            validate_specs(specs)
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
 
 
 class ResolveDatabaseTest(unittest.TestCase):
@@ -762,6 +828,22 @@ class ResolveDatabaseTest(unittest.TestCase):
         )
 
         self.assertNotIn("OPTIONS", entry)
+
+    def test_a_refused_shared_alias_is_logged_before_the_raise(self):
+        """RS-21 — the log line and the exception carry the same text."""
+        clear_logs()
+        env = {"DATABASE_URL": COMMON_URL}
+
+        with self.assertRaises(SharedDatabaseRefused) as caught:
+            resolve_database(
+                self.spec(alias="archive", allow_sharing_common_db=False),
+                GAME_DIR,
+                env,
+            )
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
 
 
 class IsSplitTest(unittest.TestCase):
@@ -1267,6 +1349,40 @@ class ConfigureTest(unittest.TestCase):
                 "-c statement_timeout=5s", databases[alias]["OPTIONS"]["options"]
             )
 
+    def test_a_game_database_collision_is_logged_before_the_raise(self):
+        """CF-23 — the log line and the exception carry the same text."""
+        clear_logs()
+        apps = [
+            self.app(
+                "cf23_app",
+                app_label="cf23_app",
+                alias="xrpl",
+                sqlite_filename="evennia.db3",
+            )
+        ]
+
+        with self.assertRaises(GameDatabaseCollision) as caught:
+            configure(self.game_databases(), apps, GAME_DIR, {})
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
+
+    def test_a_successful_configure_logs_where_each_alias_landed(self):
+        """CF-24 — one INFO line naming each alias, read back from disk."""
+        clear_logs()
+        apps = [
+            self.app("cf24_xrpl", app_label="cf24_xrpl", alias="xrpl"),
+            self.app("cf24_bus", app_label="cf24_bus", alias="messagebus"),
+        ]
+
+        configure(self.game_databases(), apps, GAME_DIR, {})
+
+        logged = read_back_logs()
+        self.assertIn("[INFO]", logged)
+        self.assertIn("xrpl", logged)
+        self.assertIn("messagebus", logged)
+
 
 class CheckSettingsTest(unittest.TestCase):
     """check_settings — the boot check, in AppConfig.ready()."""
@@ -1408,6 +1524,32 @@ class CheckSettingsTest(unittest.TestCase):
             apps_module.CascadeConfig.ready(mock.Mock())
 
         checked.assert_called_once_with()
+
+    def test_a_clean_run_writes_an_info_line_to_disk(self):
+        """BC-10 — the clean-run line, read back from disk."""
+        clear_logs()
+        app = self.app(
+            "bc10_app",
+            requires_us="evennia-database-cascade",
+            app_label="bc10_app",
+            alias="xrpl",
+        )
+
+        check_settings([app], self.databases_with("xrpl"))
+
+        self.assertIn("[INFO]", read_back_logs())
+
+    def test_a_refusal_is_logged_to_disk_before_the_raise(self):
+        """BC-11 — the refusal lands at ERROR with the exception's text."""
+        clear_logs()
+        app = self.app("bc11_app", requires_us="evennia-database-cascade")
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings([app], self.databases_with())
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
 
 
 class MigrateAllTest(unittest.TestCase):
@@ -1621,3 +1763,35 @@ class MigrateAllTest(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             migrate_all([app], {}, database="xrpl")
+
+    def test_a_missing_extension_refusal_is_logged_before_the_raise(self):
+        """MG-15 — the log line and the exception carry the same text."""
+        clear_logs()
+        app = self.app(
+            "mg15_app",
+            app_label="mg15_app",
+            alias="ai_memory",
+            required_extensions=("vector",),
+        )
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            migrate_all([app], {})
+
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(str(caught.exception), logged)
+
+    def test_a_successful_migrate_logs_what_was_migrated(self):
+        """MG-16 — one INFO line naming the bare migrate and each alias."""
+        clear_logs()
+        apps = [
+            self.app("mg16_bus", app_label="mg16_bus", alias="messagebus"),
+            self.app("mg16_xrpl", app_label="mg16_xrpl", alias="xrpl"),
+        ]
+
+        migrate_all(apps, {})
+
+        logged = read_back_logs()
+        self.assertIn("[INFO]", logged)
+        self.assertIn("messagebus", logged)
+        self.assertIn("xrpl", logged)

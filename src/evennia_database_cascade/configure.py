@@ -142,6 +142,15 @@ def configure(
 
     ours = [CascadeRouter(spec) for spec in specs if spec.alias in split]
 
+    from .log import cascade_log
+
+    landed = ", ".join(
+        f"{spec.alias} ("
+        f"{'own database' if spec.alias in split else 'game database'})"
+        for spec in specs
+    )
+    cascade_log(f"configured aliases: {landed or 'none declared'}")
+
     return resolved, list(routers) + ours
 
 
@@ -178,9 +187,13 @@ def _refuse_the_game_database_file(spec, entry, default_entry):
     if ours != theirs:
         return
 
-    raise GameDatabaseCollision(
+    message = (
         f"{spec.alias!r} resolves to {entry['NAME']}, which is the game's own "
         f"database. It would share every table with the game rather than have "
         f"a set of its own, and a world rebuild would take both. Give the "
         f"spec a different sqlite_filename, or a database of its own."
     )
+    from .log import cascade_log
+
+    cascade_log(message, level="ERROR")
+    raise GameDatabaseCollision(message)

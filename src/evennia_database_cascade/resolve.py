@@ -141,7 +141,7 @@ def resolve_database(
         common_url = env.get(common_url_var) or None
         if common_url:
             if not spec.allow_sharing_common_db:
-                raise SharedDatabaseRefused(
+                message = (
                     f"{common_url_var} is set and {spec.alias!r} may not "
                     f"share it. Its tables would not be a second set of its "
                     f"own — they are the ones already in that database. Give "
@@ -149,6 +149,10 @@ def resolve_database(
                     f"leave both unset and it falls back to its own SQLite "
                     f"file."
                 )
+                from .log import cascade_log
+
+                cascade_log(message, level="ERROR")
+                raise SharedDatabaseRefused(message)
             entry = parse_url(common_url)
         else:
             entry = {
