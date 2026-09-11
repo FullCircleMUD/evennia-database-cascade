@@ -28,6 +28,8 @@ dependencies = [
     "evennia",
     # Parses DATABASE_URL and DATABASE_URL_<ALIAS> into a DATABASES entry.
     "dj-database-url",
+    # Not on PyPI — editable-install the sibling checkout (see docs/installing.md).
+    "evennia-logging-extension",
 ]
 
 [project.optional-dependencies]

@@ -5,9 +5,6 @@ Unlike most of this library, this module is **not** on the settings path —
 Django imports it during ``setup()``, well after the consumer's settings module
 has finished. So it may import Django, and ``ready()`` is the first point at
 which anything here can read ``settings.DATABASES`` back.
-
-It still cannot log: ``ready()`` runs during ``django.setup()``, before the
-reactor exists. See ``log.py``.
 """
 
 from django.apps import AppConfig

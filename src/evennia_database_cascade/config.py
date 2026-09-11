@@ -10,8 +10,6 @@ See ``discovery.py`` for the full statement of that constraint. It also holds
 no settings accessors, because the library reads no Django settings — nothing
 can, at the point it runs. What a consumer configures arrives as arguments to
 ``configure()`` or as environment variables.
-
-``log.py``'s two constants are the standing exemption and stay there.
 """
 
 import re

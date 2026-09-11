@@ -12,6 +12,10 @@ evennia
 # demo_game/server/conf/settings.py. Harmless everywhere else.
 sqlean.py
 
+# The library's logging mechanism — not on PyPI, so installed as the sibling
+# checkout.
+-e ../../evennia-logging-extension
+
 # The library under test.
 -e ..
 

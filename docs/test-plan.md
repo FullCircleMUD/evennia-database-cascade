@@ -27,7 +27,6 @@ that file is source material, not a commitment.
 | `CF` | `configure` — the one call a consumer makes, tying the rest together |
 | `BC` | `check_settings` — the boot check, in `AppConfig.ready()` |
 | `MG` | `migrate_all` and `evennia cascade_migrate` — reaching every split alias |
-| `LG` | `cascade_log` — the logging shim |
 
 ## Fixtures
 
@@ -221,8 +220,7 @@ rather than two. Without it the aliases move and the game does not, which on Pos
 quietly on SQLite while its libraries are on the server, and on SQLite creates an empty file nothing
 will ever migrate. `CF-18` is the assertion that catches it.
 
-Nothing here logs. Everything in this call runs before `django.setup()`, where the shim raises — see
-principle 8 in [CLAUDE.md](../CLAUDE.md). Failures raise, and the traceback is the record.
+Nothing here logs. Failures raise, and the traceback is the record.
 
 | ID | Case | Test function |
 |---|---|---|
@@ -267,9 +265,6 @@ Named `check_settings` in `config.py` and called from `ready()` because that is 
 library here uses, even though what it checks is not settings. `from django.conf import settings`
 goes inside the function, so `config.py` stays importable from a settings module.
 
-This is where logging starts — see principle 8 in [CLAUDE.md](../CLAUDE.md). Nothing before it can
-write a line.
-
 | ID | Case | Test function |
 |---|---|---|
 | BC-01 | An app whose distribution requires this library and has a `db_spec` — passes | `test_a_dependent_app_declaring_a_spec_passes` |
@@ -281,7 +276,7 @@ write a line.
 | BC-07 | An app with a `db_spec` whose alias is absent — raises, naming the app and the alias | `test_a_declared_alias_missing_from_databases_is_refused` |
 | BC-08 | Two such apps — one raise, naming both | `test_two_missing_aliases_are_reported_together` |
 | BC-09 | Both kinds of problem at once — one raise, naming all of them | `test_both_kinds_of_problem_are_reported_together` |
-| BC-10 | **Retired.** Asserted a log line on a clean run. Nothing in this library can log — see `log.py` — and the case passed only because the shim was mocked | — |
+| BC-10 | **Retired.** Asserted a log line on a clean run; the case passed only because the shim was mocked | — |
 | BC-11 | **Retired.** Asserted a refusal was logged before being raised. Same reason as BC-10 | — |
 | BC-12 | `ready()` calls the check, so it cannot be defined and never run | `test_ready_calls_the_check` |
 
@@ -294,7 +289,7 @@ created, which is the failure the library exists to prevent and the one place a 
 expected to remember a list.
 
 It runs in a different process from `configure()`, so it re-derives the split set through
-`split_aliases` rather than being handed one. Django is up by then, so this logs.
+`split_aliases` rather than being handed one.
 
 Options are forwarded to Django's `migrate` untouched, so a consumer keeps `--verbosity` and
 `--noinput`. `database` is the exception: the helper decides that per call, and a caller supplying it
@@ -320,7 +315,7 @@ reads it back from the same place.
 | MG-04 | The split set comes from `split_aliases`, not a second derivation of the same rule | `test_the_split_set_comes_from_split_aliases` |
 | MG-05 | An unsplit alias never gets its own call — the bare migrate already covered it | `test_an_unsplit_alias_never_gets_its_own_call` |
 | MG-06 | A failing migrate propagates rather than being swallowed | `test_a_failing_migrate_propagates` |
-| MG-07 | **Retired.** Asserted a log line naming what was migrated. Nothing in this library can log — see `log.py`. The command's own stdout is the record | — |
+| MG-07 | **Retired.** Asserted a log line naming what was migrated; the command's own stdout is the record | — |
 | MG-08 | `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, defaulting to `DATABASE_URL` | `test_the_common_variable_comes_from_the_setting` |
 | MG-09 | The management command calls `migrate_all`, so the two cannot drift | `test_the_command_calls_migrate_all` |
 | MG-10 | Options are forwarded to `migrate` untouched, and a caller-supplied `database` is refused rather than silently overridden | `test_options_are_forwarded_and_database_is_refused` |
@@ -329,19 +324,3 @@ reads it back from the same place.
 | MG-13 | Several missing, across aliases — one raise naming all of them | `test_every_missing_extension_is_reported_together` |
 | MG-14 | Skipped on a non-Postgres alias, where there are no extensions to have | `test_the_check_is_skipped_on_a_non_postgres_alias` |
 
-## LG — `cascade_log`
-
-**Nothing in this library calls the shim**, so these cases prove only that our copy is faithful to
-the standard's — not that anything is ever written. Evennia's `log_file` writes through
-`deferToThread` and every part of this library runs before a reactor exists, so a call would open the
-file and write nothing. Measured, not assumed: a 0-byte `cascade.log` beside a demo gamedir that had
-just refused a migration. See `log.py` and principle 8.
-
-| ID | Case | Test function |
-|---|---|---|
-| LG-01 | A call reaches `logger.log_file` with `cascade.log` as the filename | `test_it_writes_to_the_library_log_file` |
-| LG-02 | The level prefixes the message as `[LEVEL] message` | `test_the_level_prefixes_the_message` |
-| LG-03 | An unknown level coerces to `INFO` rather than raising. A log call must never raise into its caller | `test_an_unknown_level_coerces_to_info` |
-| LG-04 | Outside an Evennia engine the call is a silent no-op — no stderr, no local file | `test_it_is_a_silent_noop_without_evennia` |
-| LG-05 | `trace=True` inside an `except` block appends the traceback | `test_trace_inside_an_except_block_appends_the_traceback` |
-| LG-06 | `trace=True` outside one appends nothing, rather than logging `NoneType: None` | `test_trace_outside_an_except_block_adds_nothing` |

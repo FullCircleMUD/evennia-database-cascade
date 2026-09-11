@@ -3,6 +3,20 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-10 — Logging converted to evennia-logging-extension
+
+126 tests. `log.py` is the standard three-line binding — `cascade_log = make_logger("cascade.log")`
+— with the extension declared in `pyproject.toml` and installed editable in both venvs (it is not on
+PyPI; `examples/requirements.txt` carries the sibling checkout). The six LG cases went with the old
+shim: they asserted its internals, which now belong to the extension and its own suite.
+
+**Proven live in the demo gamedir**: a WARN line, and an ERROR line with `trace=True` inside an
+active exception, both landed in `server/logs/cascade.log` in Evennia's format, with no stray files.
+
+**Nothing calls `cascade_log` yet** — the linter's one warning (`log_shim_unused`) stands until the
+call sites are agreed. The refusal paths are the obvious candidates: log at ERROR before the raise,
+same text in both channels. [TBD — needs discussion: which sites should log.]
+
 ## 2026-09-10 — All three rungs proven live, and two defects the unit tests could not see
 
 132 tests. The demo gamedir was run through every rung against a real Django, real routers and real

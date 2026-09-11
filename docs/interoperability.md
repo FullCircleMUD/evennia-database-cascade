@@ -6,7 +6,7 @@ This library against every sibling library in `libraries/`.
 migrations and issues no ORM writes. All of its work happens inside the consumer's settings module,
 before `django.setup()` — it reads the environment, writes `DATABASES` and `DATABASE_ROUTERS`, and
 stops. It starts no scripts, dispatches nothing off the reactor thread and does no network work. It
-imports Evennia only in its logging shim.
+imports Evennia nowhere; its logging goes through `evennia-logging-extension`.
 
 The coupling runs the opposite way from usual: siblings depend on this library, and this library
 imports none of them. The dividing line throughout is whether a sibling owns tables — one with no
@@ -81,16 +81,11 @@ library to place.
 
 ## evennia-logging-extension
 
-**No coupling.** At scaffold stage — no library code, no models — so there is nothing for this
-library to place.
+**Hard dependency** — the one sibling this library imports. `log.py` binds `cascade_log` through
+its `make_logger`, which writes with or without a reactor. It is not on PyPI, so it installs as an
+editable sibling checkout — see [installing.md](installing.md).
 
-Worth watching for a different reason. This library logs nothing, because Evennia's `log_file` needs
-a running reactor and every part of this one works before there is one (principle 8 in
-[CLAUDE.md](../CLAUDE.md)). If logging-extension grows a mechanism that writes without a reactor,
-that decision is worth revisiting rather than inheriting.
-
-`[TBD — confirm once it has code: whether it owns tables, and whether it can write before the reactor
-starts.]`
+In the other direction there is nothing to place: logging-extension owns no tables.
 
 ## evennia-message-bus
 

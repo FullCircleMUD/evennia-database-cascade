@@ -7,8 +7,7 @@ recorded as applied and no table is created. Every split alias therefore needs
 ``migrate --database <alias>``, and this is the thing that knows the list.
 
 **Not on the settings path.** This runs from a management command, after
-``django.setup()``, so it may import Django. It does not log — see ``log.py``
-for why nothing in this library does.
+``django.setup()``, so it may import Django.
 
 It re-derives the split set through ``split_aliases`` rather than being handed
 one, because ``configure()`` ran in a different process and nothing it

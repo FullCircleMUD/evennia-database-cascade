@@ -7,9 +7,8 @@ alias, and the router list follows from which of them ended up on a database
 of their own.
 
 **This module is on the settings path, so it imports nothing from Django.**
-Nothing here logs either — see ``log.py`` for why nothing in this library
-does. Failures raise, and the traceback is the record, since the server does
-not start.
+Failures raise, and the traceback is the record, since the server does not
+start.
 """
 
 import os

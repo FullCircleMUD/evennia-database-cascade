@@ -39,7 +39,6 @@ from evennia_database_cascade import configure
 from evennia_database_cascade import router as router_module
 from evennia_database_cascade import migrate as migrate_module
 from evennia_database_cascade.config import UNSET, check_settings, get_common_url_var
-from evennia_database_cascade.log import cascade_log
 from evennia_database_cascade.migrate import migrate_all
 from evennia_database_cascade.configure import GameDatabaseCollision
 from evennia_database_cascade.resolve import (
@@ -1622,94 +1621,3 @@ class MigrateAllTest(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             migrate_all([app], {}, database="xrpl")
-
-
-class LogShimTest(unittest.TestCase):
-    """cascade_log — the logging shim.
-
-    The shim is copied verbatim across the libraries, so these cases are the
-    same shape as theirs. Evennia's logger is faked through sys.modules
-    because the shim imports it lazily, inside the call.
-    """
-
-    def capture(self):
-        """A fake Evennia logger recording every log_file call."""
-        fake = mock.Mock()
-        fake.log_file = mock.Mock()
-        return fake
-
-    def logging_as(self, fake):
-        """Run with our fake standing in for evennia.utils.logger."""
-        return mock.patch.dict(
-            "sys.modules", {"evennia.utils": mock.Mock(logger=fake)}
-        )
-
-    def test_it_writes_to_the_library_log_file(self):
-        """LG-01 — the call reaches log_file with cascade.log."""
-        fake = self.capture()
-
-        with self.logging_as(fake):
-            cascade_log("resolved four aliases")
-
-        fake.log_file.assert_called_once_with(
-            "[INFO] resolved four aliases", filename="cascade.log"
-        )
-
-    def test_the_level_prefixes_the_message(self):
-        """LG-02 — the level is written as [LEVEL] message."""
-        fake = self.capture()
-
-        with self.logging_as(fake):
-            cascade_log("migrate failed", level="ERROR")
-
-        fake.log_file.assert_called_once_with(
-            "[ERROR] migrate failed", filename="cascade.log"
-        )
-
-    def test_an_unknown_level_coerces_to_info(self):
-        """LG-03 — an unknown level degrades rather than raising."""
-        fake = self.capture()
-
-        with self.logging_as(fake):
-            cascade_log("something", level="CRITICAL")
-
-        fake.log_file.assert_called_once_with(
-            "[INFO] something", filename="cascade.log"
-        )
-
-    def test_it_is_a_silent_noop_without_evennia(self):
-        """LG-04 — outside an Evennia engine the call does nothing at all."""
-        real_import = __import__
-
-        def refuse_evennia(name, *args, **kwargs):
-            if name == "evennia.utils":
-                raise ImportError("no evennia here")
-            return real_import(name, *args, **kwargs)
-
-        with mock.patch("builtins.__import__", side_effect=refuse_evennia):
-            self.assertIsNone(cascade_log("nobody hears this"))
-
-    def test_trace_inside_an_except_block_appends_the_traceback(self):
-        """LG-05 — trace=True carries the active exception."""
-        fake = self.capture()
-
-        with self.logging_as(fake):
-            try:
-                raise ValueError("the original problem")
-            except ValueError:
-                cascade_log("migrate failed", level="ERROR", trace=True)
-
-        written = fake.log_file.call_args[0][0]
-        self.assertIn("[ERROR] migrate failed", written)
-        self.assertIn("the original problem", written)
-
-    def test_trace_outside_an_except_block_adds_nothing(self):
-        """LG-06 — no NoneType: None noise where there is no exception."""
-        fake = self.capture()
-
-        with self.logging_as(fake):
-            cascade_log("no exception here", trace=True)
-
-        fake.log_file.assert_called_once_with(
-            "[INFO] no exception here", filename="cascade.log"
-        )

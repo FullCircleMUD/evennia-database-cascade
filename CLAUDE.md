@@ -65,21 +65,9 @@ Agreed in the design conversation of 2026-09-08. Every implementation decision m
    active and which aliases need `migrate --database <alias>`. They come from the same call, because
    the failure when they disagree is silent: a router refuses the tables while Django records the
    migrations as applied, leaving a database that looks migrated and holds nothing.
-8. **This library logs nothing, and that is an agreed exception to the logging standard.** Evennia's
-   `logger.log_file` writes through `deferToThread`, which needs a running Twisted reactor, and every
-   part of this library works before one exists — `configure()` while the consumer's settings module
-   is still executing, the boot check during `django.setup()`, the migrate helper in a management
-   command process that starts no reactor at all. A call opens the file and writes nothing. Measured,
-   not reasoned: a 0-byte `cascade.log` beside a demo gamedir that had just refused a migration.
-
-   A mechanism of our own was considered and judged unnecessary. Every failure here is fatal — the
-   server does not start, or the command dies — so the exception and its traceback are already in
-   front of whoever needs them.
-
-   `log.py` stays, verbatim and uncalled, so the library lints as one of the corpus rather than
-   looking like it forgot; its docstring carries this reasoning. The single `log_shim_unused` warning
-   is the deliberate note. **Do not "fix" it by adding a call site** — the call would do nothing, and
-   `CascadeRouter` is the only thing here that runs with a reactor up, with nothing to report.
+8. **Logging binds through `evennia-logging-extension`.** `log.py` is the standard three-line
+   binding — `cascade_log = make_logger("cascade.log")` — which writes with or without a reactor,
+   so every part of this library can log. Nothing calls it yet.
 9. **`INSTALLED_APPS` is the consumer's, and unvalidatable.** A library left out of it never has its
    `ready()` run, so nothing of ours can notice. Everything after that point is validated as hard as
    it can be — spec fields when `configure()` runs, and the presence cross-check at boot.
@@ -131,6 +119,7 @@ evennia-database-cascade/
 ├── pyproject.toml
 ├── runtests.py                # standalone test runner (no consumer gamedir needed)
 ├── docs/                      # design wiki (humans + LLMs)
+├── examples/                  # demo gamedir, plus demo_library — a consumer distribution for the boot check
 ├── src/
 │   └── evennia_database_cascade/
 │       ├── __init__.py        # re-exports the consumer-facing surface
@@ -138,7 +127,7 @@ evennia-database-cascade/
 │       ├── config.py          # every constant, the settings accessors, check_settings()
 │       ├── configure.py       # configure() — the one call a consumer makes
 │       ├── discovery.py       # discover_specs / validate_specs
-│       ├── log.py             # the logging shim
+│       ├── log.py             # cascade_log — the make_logger binding
 │       ├── management/
 │       │   └── commands/
 │       │       └── cascade_migrate.py
@@ -151,8 +140,8 @@ evennia-database-cascade/
 ```
 
 **Everything above is on the settings path except `apps.py`, `migrate.py` and the management
-command.** Those three run after `django.setup()`, so they may import Django and they may log. The
-rest may do neither — see principles 4, 5 and 8.
+command.** Those three run after `django.setup()`, so they may import Django. The rest may not —
+see principles 4 and 5.
 
 ## Tools and environment
 

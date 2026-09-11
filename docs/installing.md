@@ -4,9 +4,11 @@ What a game does to run this library, and what a library that owns tables does t
 
 ## 1. Install the package
 
-Nothing is published yet, so install from a checkout:
+Nothing is published yet, so install from a checkout — this library and `evennia-logging-extension`,
+its logging mechanism, which is also not on PyPI:
 
 ```
+pip install -e path/to/evennia-logging-extension
 pip install -e path/to/evennia-database-cascade
 ```
 
@@ -248,12 +250,8 @@ to whichever library stores the vectors rather than to the deployment.
 
 ## What you see when something is wrong
 
-**This library writes no log file.** Not at boot, not during a migration, not ever. `cascade.log`
-will be created and stay empty; do not go looking in it.
+Every failure raises, and every failure is fatal — a bad spec or a refused alias stops the
+settings module, the boot check stops `django.setup()`, and a failed migration stops the command.
+The exception and its traceback are the record, and they are already in front of you.
 
-Every failure raises instead, and every failure is fatal — a bad spec or a refused alias stops the
-settings module, the boot check stops `django.setup()`, and a failed migration stops the command. So
-the exception and its traceback are the record, and they are already in front of you.
-
-Why there is no log: Evennia writes log files through the Twisted reactor, and everything this
-library does happens before one exists.
+Nothing writes to `cascade.log` yet — `cascade_log` has no call sites.
