@@ -9,7 +9,7 @@ where that gets checked.
 
 | | |
 |---|---|
-| `demo_library/` | A throwaway distribution declaring `evennia-database-cascade` as a dependency, with one model and a `db_spec`. The **only** way to exercise the boot check's `Requires-Dist` path, since a gamedir is not a distribution |
+| `demo_library/` | A throwaway distribution declaring `evennia-database-cascade` as a dependency, with a `db_spec` and **two** apps — `demo_library` and `demo_library.extra`, covered by one spec declaring both labels. The **only** way to exercise the boot check's `Requires-Dist` path, since a gamedir is not a distribution |
 | `demo_game/` | A stock `evennia --init` gamedir, plus `demo_app/` — its own app, its own model, its own `db_spec` |
 | `venv/` | The demo's environment, gitignored |
 
@@ -60,22 +60,31 @@ first run.
 
 ## What it has proved
 
-Run on 2026-09-08, from a fresh gamedir:
+Run on 2026-09-12:
 
 - **`configure()` runs in a real settings module.** Three aliases resolved — `default`, `demolib`,
   `demogame` — each to its own SQLite file under `server/`.
 - **`DATABASE_ROUTERS` holds instances**, not dotted paths, and Django accepts them:
-  `CascadeRouter(demolib)`, `CascadeRouter(demogame)`.
-- **The boot check passes at a real `ready()`**, with both consumer shapes present.
-- **The router genuinely gates table creation.** After `cascade_migrate`:
+  `CascadeRouter(demolib, ('demo_library', 'demo_library_extra'))`, `CascadeRouter(demogame)`.
+- **The boot check passes at a real `ready()`**, with both consumer shapes present — including
+  `demo_library.extra`, which ships no `db_spec` of its own and is covered by its sibling's.
+- **A spec's several app labels all route to the one alias.** `db_for_read` answers `demolib` for
+  models of both `demo_library` and `demo_library_extra`, and `default` for Evennia's `ObjectDB`.
+- **The router genuinely gates table creation.** After `evennia cascade_migrate`:
 
   | | tables | demo tables |
   |---|---|---|
   | `evennia.db3` | 42 | none |
-  | `demolib.db3` | 3 | `demo_library_demorecord` |
+  | `demolib.db3` | 4 | `demo_library_demorecord`, `demo_library_extra_extrarecord` |
   | `demogame.db3` | 3 | `demo_app_gamerecord` |
 
-  Neither demo table reached the game database, which is the separation the whole library is for.
+  No demo table reached the game database, which is the separation the whole library is for.
+- **Rows follow the tables.** An ORM write and read back with no `.using()`, on all three models,
+  landed in and returned from the right file.
+
+It also **caught a real defect**: the boot check demanded a `db_spec` per app, which refused a
+library shipping two apps under one spec — the shape the multi-label field exists to serve. The unit
+suite could not see it, because it mocks the distribution metadata this path reads.
 
 ## What it has disproved
 

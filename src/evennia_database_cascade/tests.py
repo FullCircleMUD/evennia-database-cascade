@@ -32,6 +32,7 @@ from evennia_database_cascade.discovery import (
     SpecImportError,
     SpecValidationError,
     discover_specs,
+    spec_is_valid,
     validate_specs,
 )
 from evennia_database_cascade import config as config_module
@@ -366,16 +367,18 @@ class AliasSpecTest(unittest.TestCase):
     """AliasSpec — what a library declares about its alias."""
 
     def test_a_spec_carries_the_values_it_was_given(self):
-        """SP-01 — a spec carries the five fields, with the values given."""
+        """SP-01 — a spec carries the fields, with the values given."""
         spec = AliasSpec(
-            app_label="evennia_archive",
+            app_labels=("evennia_archive", "evennia_archive_web"),
             alias="archive",
             sqlite_filename="archive.db3",
             allow_sharing_common_db=False,
             allow_foreign_tables_in_own_db=True,
         )
 
-        self.assertEqual(spec.app_label, "evennia_archive")
+        self.assertEqual(
+            spec.app_labels, ("evennia_archive", "evennia_archive_web")
+        )
         self.assertEqual(spec.alias, "archive")
         self.assertEqual(spec.sqlite_filename, "archive.db3")
         self.assertFalse(spec.allow_sharing_common_db)
@@ -383,47 +386,47 @@ class AliasSpecTest(unittest.TestCase):
 
     def test_sqlite_filename_defaults_to_the_alias(self):
         """SP-02 — sqlite_filename defaults to f"{alias}.db3"."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertEqual(spec.sqlite_filename, "xrpl.db3")
 
     def test_an_explicit_sqlite_filename_is_kept(self):
         """SP-03 — an explicit sqlite_filename is not overwritten."""
         spec = AliasSpec(
-            app_label="fcm_xrpl", alias="xrpl", sqlite_filename="ledger.db3"
+            app_labels="fcm_xrpl", alias="xrpl", sqlite_filename="ledger.db3"
         )
 
         self.assertEqual(spec.sqlite_filename, "ledger.db3")
 
     def test_sharing_the_common_db_is_allowed_by_default(self):
         """SP-04 — allow_sharing_common_db defaults to True."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertTrue(spec.allow_sharing_common_db)
 
     def test_foreign_tables_are_refused_by_default(self):
         """SP-05 — allow_foreign_tables_in_own_db defaults to False."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertFalse(spec.allow_foreign_tables_in_own_db)
 
-    def test_app_label_and_alias_are_independent(self):
-        """SP-06 — a spec whose app_label and alias differ keeps both."""
-        spec = AliasSpec(app_label="evennia_archive", alias="archive")
+    def test_app_labels_and_alias_are_independent(self):
+        """SP-06 — a spec whose app_labels and alias differ keeps both."""
+        spec = AliasSpec(app_labels="evennia_archive", alias="archive")
 
-        self.assertEqual(spec.app_label, "evennia_archive")
+        self.assertEqual(spec.app_labels, ("evennia_archive",))
         self.assertEqual(spec.alias, "archive")
 
-    def test_app_label_and_alias_are_required(self):
-        """SP-07 — omitting either app_label or alias raises."""
+    def test_app_labels_and_alias_are_required(self):
+        """SP-07 — omitting either app_labels or alias raises."""
         with self.assertRaises(TypeError):
             AliasSpec(alias="xrpl")
         with self.assertRaises(TypeError):
-            AliasSpec(app_label="fcm_xrpl")
+            AliasSpec(app_labels="fcm_xrpl")
 
     def test_a_spec_is_frozen(self):
         """SP-08 — assigning to a field raises."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         with self.assertRaises(dataclasses.FrozenInstanceError):
             spec.alias = "something_else"
@@ -431,7 +434,7 @@ class AliasSpecTest(unittest.TestCase):
     def test_an_unknown_field_raises(self):
         """SP-09 — an unknown field name raises at construction."""
         with self.assertRaises(TypeError):
-            AliasSpec(app_label="fcm_xrpl", alias="xrpl", alais="typo")
+            AliasSpec(app_labels="fcm_xrpl", alias="xrpl", alais="typo")
 
     def test_spec_module_imports_nothing_from_django(self):
         """SP-10 — spec.py imports nothing from Django."""
@@ -439,47 +442,53 @@ class AliasSpecTest(unittest.TestCase):
 
     def test_conn_max_age_says_nothing_by_default(self):
         """SP-11 — conn_max_age defaults to the UNSET sentinel."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertIs(spec.conn_max_age, UNSET)
 
     def test_a_spec_keeps_the_conn_max_age_it_was_given(self):
         """SP-12 — a spec that sets it keeps the value, None included."""
         self.assertEqual(
-            AliasSpec(app_label="a", alias="a", conn_max_age=60).conn_max_age, 60
+            AliasSpec(app_labels="a", alias="a", conn_max_age=60).conn_max_age, 60
         )
         self.assertIsNone(
-            AliasSpec(app_label="b", alias="b", conn_max_age=None).conn_max_age
+            AliasSpec(app_labels="b", alias="b", conn_max_age=None).conn_max_age
         )
 
     def test_session_options_say_nothing_by_default(self):
         """SP-13 — session_options defaults to the UNSET sentinel."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertIs(spec.session_options, UNSET)
 
     def test_required_extensions_are_empty_by_default(self):
         """SP-15 — required_extensions defaults to empty."""
-        spec = AliasSpec(app_label="fcm_xrpl", alias="xrpl")
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
 
         self.assertEqual(tuple(spec.required_extensions), ())
 
     def test_a_spec_keeps_the_extensions_it_declared(self):
         """SP-16 — a spec that declares extensions keeps them."""
         spec = AliasSpec(
-            app_label="evennia_ai_memory",
+            app_labels="evennia_ai_memory",
             alias="ai_memory",
             required_extensions=("vector",),
         )
 
         self.assertEqual(tuple(spec.required_extensions), ("vector",))
 
+    def test_a_bare_string_app_labels_becomes_a_one_tuple(self):
+        """SP-17 — a bare string arrives as a one-tuple."""
+        spec = AliasSpec(app_labels="fcm_xrpl", alias="xrpl")
+
+        self.assertEqual(spec.app_labels, ("fcm_xrpl",))
+
     def test_a_spec_keeps_the_session_options_it_was_given(self):
         """SP-14 — a spec that sets them keeps the mapping."""
         options = {"hnsw.iterative_scan": "relaxed_order"}
 
         spec = AliasSpec(
-            app_label="evennia_ai_memory",
+            app_labels="evennia_ai_memory",
             alias="ai_memory",
             session_options=options,
         )
@@ -493,8 +502,8 @@ class ValidateSpecsTest(unittest.TestCase):
     def test_a_valid_list_passes(self):
         """VS-01 — a valid list passes and returns nothing."""
         specs = [
-            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
-            AliasSpec(app_label="evennia_archive", alias="archive"),
+            AliasSpec(app_labels="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_labels="evennia_archive", alias="archive"),
         ]
 
         self.assertIsNone(validate_specs(specs))
@@ -506,8 +515,8 @@ class ValidateSpecsTest(unittest.TestCase):
     def test_two_specs_claiming_one_alias_raise(self):
         """VS-03 — two specs claiming one alias raise, naming both app labels."""
         specs = [
-            AliasSpec(app_label="library_one", alias="shared"),
-            AliasSpec(app_label="library_two", alias="shared"),
+            AliasSpec(app_labels="library_one", alias="shared"),
+            AliasSpec(app_labels="library_two", alias="shared"),
         ]
 
         with self.assertRaises(SpecValidationError) as caught:
@@ -519,10 +528,14 @@ class ValidateSpecsTest(unittest.TestCase):
         self.assertIn("library_two", message)
 
     def test_two_specs_claiming_one_app_label_raise(self):
-        """VS-04 — two specs claiming one app_label raise, naming both aliases."""
+        """VS-04 — one label in two specs' app_labels raises, naming both aliases.
+
+        One spec declares two labels, so the case also pins the collision
+        being found across the tuples rather than by comparing them whole.
+        """
         specs = [
-            AliasSpec(app_label="one_library", alias="alias_one"),
-            AliasSpec(app_label="one_library", alias="alias_two"),
+            AliasSpec(app_labels=("one_library", "one_library_web"), alias="alias_one"),
+            AliasSpec(app_labels="one_library", alias="alias_two"),
         ]
 
         with self.assertRaises(SpecValidationError) as caught:
@@ -533,48 +546,13 @@ class ValidateSpecsTest(unittest.TestCase):
         self.assertIn("alias_one", message)
         self.assertIn("alias_two", message)
 
-    def test_an_empty_alias_raises(self):
-        """VS-05 — an empty or whitespace-only alias raises."""
-        with self.assertRaises(SpecValidationError):
-            validate_specs([AliasSpec(app_label="fcm_xrpl", alias="")])
-        with self.assertRaises(SpecValidationError):
-            validate_specs([AliasSpec(app_label="fcm_xrpl", alias="   ")])
-
-    def test_an_empty_app_label_raises(self):
-        """VS-06 — an empty or whitespace-only app_label raises."""
-        with self.assertRaises(SpecValidationError):
-            validate_specs([AliasSpec(app_label="", alias="xrpl")])
-        with self.assertRaises(SpecValidationError):
-            validate_specs([AliasSpec(app_label="   ", alias="xrpl")])
-
-    def test_an_alias_of_default_raises(self):
-        """VS-07 — an alias of "default" raises."""
-        specs = [AliasSpec(app_label="fcm_xrpl", alias="default")]
-
-        with self.assertRaises(SpecValidationError) as caught:
-            validate_specs(specs)
-
-        self.assertIn("default", str(caught.exception))
-        self.assertIn("fcm_xrpl", str(caught.exception))
-
-    def test_an_alias_that_cannot_be_an_environment_variable_raises(self):
-        """VS-09 — an alias that is not a valid environment-variable name."""
-        for alias in ("my-alias", "my alias", "2fast", "alias!"):
-            with self.assertRaises(SpecValidationError, msg=alias):
-                validate_specs([AliasSpec(app_label="app", alias=alias)])
-
-        for alias in ("ai_memory", "xrpl", "messagebus2"):
-            self.assertIsNone(
-                validate_specs([AliasSpec(app_label="app", alias=alias)]), alias
-            )
-
     def test_every_problem_is_reported_in_one_raise(self):
         """VS-08 — several problems at once produce one raise, naming all."""
         specs = [
-            AliasSpec(app_label="library_one", alias="shared"),
-            AliasSpec(app_label="library_two", alias="shared"),
-            AliasSpec(app_label="", alias="nameless_app"),
-            AliasSpec(app_label="library_four", alias="default"),
+            AliasSpec(app_labels="library_one", alias="shared"),
+            AliasSpec(app_labels="library_two", alias="shared"),
+            AliasSpec(app_labels="", alias="nameless_app"),
+            AliasSpec(app_labels="library_four", alias="default"),
         ]
 
         with self.assertRaises(SpecValidationError) as caught:
@@ -589,8 +567,8 @@ class ValidateSpecsTest(unittest.TestCase):
         """VS-10 — the log line and the exception carry the same text."""
         clear_logs()
         specs = [
-            AliasSpec(app_label="library_one", alias="shared"),
-            AliasSpec(app_label="library_two", alias="shared"),
+            AliasSpec(app_labels="library_one", alias="shared"),
+            AliasSpec(app_labels="library_two", alias="shared"),
         ]
 
         with self.assertRaises(SpecValidationError) as caught:
@@ -601,12 +579,84 @@ class ValidateSpecsTest(unittest.TestCase):
         self.assertIn(str(caught.exception), logged)
 
 
+class SpecIsValidTest(unittest.TestCase):
+    """spec_is_valid — the one-line consumer contract check."""
+
+    def bad_specs(self):
+        """One spec per refused shape, constructing cleanly."""
+        return [
+            AliasSpec(app_labels=(), alias="xrpl"),
+            AliasSpec(app_labels="", alias="xrpl"),
+            AliasSpec(app_labels=("fcm_xrpl", "   "), alias="xrpl"),
+            AliasSpec(app_labels="fcm_xrpl", alias=""),
+            AliasSpec(app_labels="fcm_xrpl", alias="   "),
+            AliasSpec(app_labels="fcm_xrpl", alias="default"),
+            AliasSpec(app_labels="fcm_xrpl", alias="my-alias"),
+        ]
+
+    def test_a_well_shaped_spec_is_valid(self):
+        """SV-01 — single- and multi-label specs of good shape are valid."""
+        self.assertTrue(
+            spec_is_valid(AliasSpec(app_labels="fcm_xrpl", alias="xrpl"))
+        )
+        self.assertTrue(
+            spec_is_valid(
+                AliasSpec(app_labels=("fcm_xrpl", "fcm_xrpl_web"), alias="xrpl")
+            )
+        )
+
+    def test_empty_or_blank_app_labels_are_invalid(self):
+        """SV-02 — an empty tuple, or a blank entry within one, is invalid."""
+        self.assertFalse(spec_is_valid(AliasSpec(app_labels=(), alias="xrpl")))
+        self.assertFalse(spec_is_valid(AliasSpec(app_labels="", alias="xrpl")))
+        self.assertFalse(
+            spec_is_valid(AliasSpec(app_labels=("fcm_xrpl", "   "), alias="xrpl"))
+        )
+
+    def test_an_empty_alias_is_invalid(self):
+        """SV-03 — an empty or whitespace-only alias is invalid."""
+        self.assertFalse(spec_is_valid(AliasSpec(app_labels="fcm_xrpl", alias="")))
+        self.assertFalse(
+            spec_is_valid(AliasSpec(app_labels="fcm_xrpl", alias="   "))
+        )
+
+    def test_an_alias_of_default_is_invalid(self):
+        """SV-04 — "default" is Django's own connection."""
+        self.assertFalse(
+            spec_is_valid(AliasSpec(app_labels="fcm_xrpl", alias="default"))
+        )
+
+    def test_an_alias_that_cannot_be_an_environment_variable_is_invalid(self):
+        """SV-05 — the alias becomes DATABASE_URL_<ALIAS>, so it must name one."""
+        for alias in ("my-alias", "my alias", "2fast", "alias!"):
+            self.assertFalse(
+                spec_is_valid(AliasSpec(app_labels="app", alias=alias)), msg=alias
+            )
+
+        for alias in ("ai_memory", "xrpl", "messagebus2"):
+            self.assertTrue(
+                spec_is_valid(AliasSpec(app_labels="app", alias=alias)), msg=alias
+            )
+
+    def test_spec_is_valid_is_exported_from_the_package_root(self):
+        """SV-06 — a consumer imports it the way they import AliasSpec."""
+        self.assertIn("spec_is_valid", evennia_database_cascade.__all__)
+        self.assertIs(evennia_database_cascade.spec_is_valid, spec_is_valid)
+
+    def test_every_refused_shape_is_refused_by_validate_specs(self):
+        """SV-07 — the consumer check and the configure-time check read one rule."""
+        for spec in self.bad_specs():
+            self.assertFalse(spec_is_valid(spec), msg=repr(spec))
+            with self.assertRaises(SpecValidationError, msg=repr(spec)):
+                validate_specs([spec])
+
+
 class ResolveDatabaseTest(unittest.TestCase):
     """resolve_database — the three rungs, for one spec."""
 
     def spec(self, **overrides):
         """An AliasSpec, with the fields a case cares about overridden."""
-        fields = {"app_label": "fcm_xrpl", "alias": "xrpl"}
+        fields = {"app_labels": "fcm_xrpl", "alias": "xrpl"}
         fields.update(overrides)
         return AliasSpec(**fields)
 
@@ -652,7 +702,7 @@ class ResolveDatabaseTest(unittest.TestCase):
 
         env = {"DATABASE_URL_AI_MEMORY": OWN_URL}
         entry = resolve_database(
-            self.spec(app_label="evennia_ai_memory", alias="ai_memory"),
+            self.spec(app_labels="evennia_ai_memory", alias="ai_memory"),
             GAME_DIR,
             env,
         )
@@ -891,9 +941,9 @@ class IsSplitTest(unittest.TestCase):
     def test_split_aliases_returns_the_split_subset_in_order(self):
         """SL-08 — split_aliases returns the split aliases, in spec order."""
         specs = [
-            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
-            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
-            AliasSpec(app_label="evennia_archive", alias="archive"),
+            AliasSpec(app_labels="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_labels="evennia_ai_memory", alias="ai_memory"),
+            AliasSpec(app_labels="evennia_archive", alias="archive"),
         ]
         env = {
             "DATABASE_URL": COMMON_URL,
@@ -906,8 +956,8 @@ class IsSplitTest(unittest.TestCase):
     def test_split_aliases_returns_nothing_when_all_share(self):
         """SL-09 — no spec split: an empty list."""
         specs = [
-            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
-            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
+            AliasSpec(app_labels="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_labels="evennia_ai_memory", alias="ai_memory"),
         ]
 
         self.assertEqual(split_aliases(specs, {"DATABASE_URL": COMMON_URL}), [])
@@ -915,8 +965,8 @@ class IsSplitTest(unittest.TestCase):
     def test_split_aliases_returns_all_of_them_on_sqlite(self):
         """SL-10 — every spec split: every alias, none omitted."""
         specs = [
-            AliasSpec(app_label="fcm_xrpl", alias="xrpl"),
-            AliasSpec(app_label="evennia_ai_memory", alias="ai_memory"),
+            AliasSpec(app_labels="fcm_xrpl", alias="xrpl"),
+            AliasSpec(app_labels="evennia_ai_memory", alias="ai_memory"),
         ]
 
         self.assertEqual(split_aliases(specs, {}), ["xrpl", "ai_memory"])
@@ -927,7 +977,7 @@ class CascadeRouterTest(unittest.TestCase):
 
     def router(self, **overrides):
         """A router over an AliasSpec, with the fields a case cares about set."""
-        fields = {"app_label": "fcm_xrpl", "alias": "xrpl"}
+        fields = {"app_labels": "fcm_xrpl", "alias": "xrpl"}
         fields.update(overrides)
         return CascadeRouter(AliasSpec(**fields))
 
@@ -967,7 +1017,7 @@ class CascadeRouterTest(unittest.TestCase):
     def test_a_foreign_app_may_join_us_when_the_spec_allows_it(self):
         """RT-07 — allow_foreign_tables_in_own_db=True defers instead."""
         router = self.router(
-            app_label="evennia_archive",
+            app_labels="evennia_archive",
             alias="archive",
             allow_foreign_tables_in_own_db=True,
         )
@@ -999,16 +1049,16 @@ class CascadeRouterTest(unittest.TestCase):
     def test_two_routers_each_answer_only_for_their_own_app(self):
         """RT-11 — the co-installed case: neither captures the other's models."""
         xrpl = self.router()
-        archive = self.router(app_label="evennia_archive", alias="archive")
+        archive = self.router(app_labels="evennia_archive", alias="archive")
 
         self.assertEqual(xrpl.db_for_read(model("fcm_xrpl")), "xrpl")
         self.assertIsNone(archive.db_for_read(model("fcm_xrpl")))
         self.assertEqual(archive.db_for_read(model("evennia_archive")), "archive")
         self.assertIsNone(xrpl.db_for_read(model("evennia_archive")))
 
-    def test_the_app_label_and_the_alias_are_read_separately(self):
-        """RT-12 — routes on the app label, returns the alias."""
-        router = self.router(app_label="evennia_archive", alias="archive")
+    def test_the_app_labels_and_the_alias_are_read_separately(self):
+        """RT-12 — routes on the labels, returns the alias."""
+        router = self.router(app_labels="evennia_archive", alias="archive")
 
         self.assertEqual(router.db_for_read(model("evennia_archive")), "archive")
         self.assertIsNone(router.db_for_read(model("archive")))
@@ -1016,6 +1066,42 @@ class CascadeRouterTest(unittest.TestCase):
     def test_router_module_imports_nothing_from_django(self):
         """RT-13 — router.py imports nothing from Django."""
         self.assertEqual(django_imports(router_module), [])
+
+    def test_models_of_every_label_route_to_the_alias(self):
+        """RT-14 — a two-label spec: models of either label reach the alias."""
+        router = self.router(app_labels=("fcm_xrpl", "fcm_xrpl_web"))
+
+        for label in ("fcm_xrpl", "fcm_xrpl_web"):
+            self.assertEqual(router.db_for_read(model(label)), "xrpl", msg=label)
+            self.assertEqual(router.db_for_write(model(label)), "xrpl", msg=label)
+
+    def test_each_label_migrates_onto_the_alias_and_nowhere_else(self):
+        """RT-15 — allow_migrate per label: True on our alias, False elsewhere."""
+        router = self.router(app_labels=("fcm_xrpl", "fcm_xrpl_web"))
+
+        for label in ("fcm_xrpl", "fcm_xrpl_web"):
+            self.assertIs(router.allow_migrate("xrpl", label), True, msg=label)
+            self.assertIs(router.allow_migrate("default", label), False, msg=label)
+
+    def test_a_relation_between_two_of_our_labels_is_allowed(self):
+        """RT-16 — models of two different labels of one spec may relate."""
+        router = self.router(app_labels=("fcm_xrpl", "fcm_xrpl_web"))
+
+        self.assertIs(
+            router.allow_relation(model("fcm_xrpl"), model("fcm_xrpl_web")), True
+        )
+
+    def test_a_foreign_label_matching_a_substring_gets_no_answer(self):
+        """RT-17 — membership over the tuple, never substring matching.
+
+        Held against a spec whose one label contains the foreign label as a
+        substring: were the field ever a string again, ``in`` would match it
+        and hand a foreign app our alias — and its tables our database.
+        """
+        router = self.router(app_labels="fcm_xrpl")
+
+        self.assertIsNone(router.db_for_read(model("xrpl")))
+        self.assertIs(router.allow_migrate("xrpl", "xrpl"), False)
 
 
 class ConfigureTest(unittest.TestCase):
@@ -1046,8 +1132,8 @@ class ConfigureTest(unittest.TestCase):
     def test_every_discovered_spec_gets_an_entry(self):
         """CF-01 — returns DATABASES carrying an entry per discovered spec."""
         apps = [
-            self.app("cf01_xrpl", app_label="cf01_xrpl", alias="xrpl"),
-            self.app("cf01_bus", app_label="cf01_bus", alias="messagebus"),
+            self.app("cf01_xrpl", app_labels="cf01_xrpl", alias="xrpl"),
+            self.app("cf01_bus", app_labels="cf01_bus", alias="messagebus"),
         ]
 
         databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
@@ -1058,7 +1144,7 @@ class ConfigureTest(unittest.TestCase):
     def test_the_default_entry_is_left_alone(self):
         """CF-02 — with no common URL set, default is exactly as it was given."""
         given = self.game_databases()
-        apps = [self.app("cf02_app", app_label="cf02_app", alias="xrpl")]
+        apps = [self.app("cf02_app", app_labels="cf02_app", alias="xrpl")]
 
         databases, _ = configure(given, apps, GAME_DIR, {})
 
@@ -1067,8 +1153,8 @@ class ConfigureTest(unittest.TestCase):
     def test_routers_are_built_for_exactly_the_split_aliases(self):
         """CF-03 — routers for the split aliases, and none for the rest."""
         apps = [
-            self.app("cf03_xrpl", app_label="cf03_xrpl", alias="xrpl"),
-            self.app("cf03_bus", app_label="cf03_bus", alias="messagebus"),
+            self.app("cf03_xrpl", app_labels="cf03_xrpl", alias="xrpl"),
+            self.app("cf03_bus", app_labels="cf03_bus", alias="messagebus"),
         ]
         env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_XRPL": OWN_URL}
 
@@ -1078,7 +1164,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_nothing_split_means_no_routers(self):
         """CF-04 — no alias split: an empty router list."""
-        apps = [self.app("cf04_app", app_label="cf04_app", alias="xrpl")]
+        apps = [self.app("cf04_app", app_labels="cf04_app", alias="xrpl")]
 
         _, routers = configure(
             self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
@@ -1089,8 +1175,8 @@ class ConfigureTest(unittest.TestCase):
     def test_everything_split_means_a_router_each_in_spec_order(self):
         """CF-05 — every alias split: one router each, in spec order."""
         apps = [
-            self.app("cf05_bus", app_label="cf05_bus", alias="messagebus"),
-            self.app("cf05_xrpl", app_label="cf05_xrpl", alias="xrpl"),
+            self.app("cf05_bus", app_labels="cf05_bus", alias="messagebus"),
+            self.app("cf05_xrpl", app_labels="cf05_xrpl", alias="xrpl"),
         ]
 
         _, routers = configure(self.game_databases(), apps, GAME_DIR, {})
@@ -1112,7 +1198,7 @@ class ConfigureTest(unittest.TestCase):
     def test_the_databases_argument_is_not_mutated(self):
         """CF-07 — the dict it was handed is not mutated."""
         given = self.game_databases()
-        apps = [self.app("cf07_app", app_label="cf07_app", alias="xrpl")]
+        apps = [self.app("cf07_app", app_labels="cf07_app", alias="xrpl")]
 
         configure(given, apps, GAME_DIR, {})
 
@@ -1120,18 +1206,18 @@ class ConfigureTest(unittest.TestCase):
 
     def test_the_routers_are_instances_carrying_their_spec(self):
         """CF-08 — routers are CascadeRouter instances, not dotted paths."""
-        apps = [self.app("cf08_app", app_label="cf08_app", alias="xrpl")]
+        apps = [self.app("cf08_app", app_labels="cf08_app", alias="xrpl")]
 
         _, routers = configure(self.game_databases(), apps, GAME_DIR, {})
 
         self.assertIsInstance(routers[0], CascadeRouter)
-        self.assertEqual(routers[0].spec.app_label, "cf08_app")
+        self.assertEqual(routers[0].spec.app_labels, ("cf08_app",))
 
     def test_an_invalid_spec_set_is_refused(self):
         """CF-09 — validate_specs is reached rather than skipped."""
         apps = [
-            self.app("cf09_one", app_label="cf09_one", alias="shared"),
-            self.app("cf09_two", app_label="cf09_two", alias="shared"),
+            self.app("cf09_one", app_labels="cf09_one", alias="shared"),
+            self.app("cf09_two", app_labels="cf09_two", alias="shared"),
         ]
 
         with self.assertRaises(SpecValidationError):
@@ -1146,7 +1232,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_the_common_variable_name_reaches_both_steps(self):
         """CF-11 — common_url_var reaches resolution and the split decision."""
-        apps = [self.app("cf11_app", app_label="cf11_app", alias="xrpl")]
+        apps = [self.app("cf11_app", app_labels="cf11_app", alias="xrpl")]
         env = {"GAME_DATABASE_URL": COMMON_URL}
 
         databases, routers = configure(
@@ -1165,7 +1251,7 @@ class ConfigureTest(unittest.TestCase):
         apps = [
             self.app(
                 "cf12_app",
-                app_label="cf12_app",
+                app_labels="cf12_app",
                 alias="xrpl",
                 sqlite_filename="evennia.db3",
             )
@@ -1190,7 +1276,7 @@ class ConfigureTest(unittest.TestCase):
         apps = [
             self.app(
                 "cf13_app",
-                app_label="cf13_app",
+                app_labels="cf13_app",
                 alias="xrpl",
                 sqlite_filename="evennia.db3",
             )
@@ -1203,8 +1289,8 @@ class ConfigureTest(unittest.TestCase):
     def test_conn_max_age_defaults_to_zero_and_reaches_every_entry(self):
         """CF-14 — the game-wide default is 0, applied to every alias."""
         apps = [
-            self.app("cf14_one", app_label="cf14_one", alias="one"),
-            self.app("cf14_two", app_label="cf14_two", alias="two"),
+            self.app("cf14_one", app_labels="cf14_one", alias="one"),
+            self.app("cf14_two", app_labels="cf14_two", alias="two"),
         ]
 
         databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
@@ -1220,7 +1306,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_a_common_url_moves_the_default_entry(self):
         """CF-17 — default resolves to the common URL when one is set."""
-        apps = [self.app("cf17_app", app_label="cf17_app", alias="xrpl")]
+        apps = [self.app("cf17_app", app_labels="cf17_app", alias="xrpl")]
 
         databases, _ = configure(
             self.game_databases(), apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
@@ -1232,8 +1318,8 @@ class ConfigureTest(unittest.TestCase):
     def test_the_game_and_every_quiet_alias_name_one_database(self):
         """CF-18 — default and the quiet aliases are the same database."""
         apps = [
-            self.app("cf18_one", app_label="cf18_one", alias="one"),
-            self.app("cf18_two", app_label="cf18_two", alias="two"),
+            self.app("cf18_one", app_labels="cf18_one", alias="one"),
+            self.app("cf18_two", app_labels="cf18_two", alias="two"),
         ]
 
         databases, routers = configure(
@@ -1252,8 +1338,8 @@ class ConfigureTest(unittest.TestCase):
     def test_an_alias_with_its_own_url_still_splits_off_the_common_one(self):
         """CF-19 — default follows the common URL, that alias does not."""
         apps = [
-            self.app("cf19_own", app_label="cf19_own", alias="own"),
-            self.app("cf19_shared", app_label="cf19_shared", alias="shared"),
+            self.app("cf19_own", app_labels="cf19_own", alias="own"),
+            self.app("cf19_shared", app_labels="cf19_shared", alias="shared"),
         ]
         env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_OWN": OWN_URL}
 
@@ -1266,7 +1352,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_the_moved_default_gets_the_same_connection_treatment(self):
         """CF-20 — default_conn_max_age and session options reach default too."""
-        apps = [self.app("cf20_app", app_label="cf20_app", alias="xrpl")]
+        apps = [self.app("cf20_app", app_labels="cf20_app", alias="xrpl")]
 
         databases, _ = configure(
             self.game_databases(),
@@ -1290,7 +1376,7 @@ class ConfigureTest(unittest.TestCase):
                 "NAME": "/somewhere/of/their/own.db3",
             }
         }
-        apps = [self.app("cf21_app", app_label="cf21_app", alias="xrpl")]
+        apps = [self.app("cf21_app", app_labels="cf21_app", alias="xrpl")]
 
         databases, _ = configure(
             given, apps, GAME_DIR, {"DATABASE_URL": COMMON_URL}
@@ -1301,7 +1387,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_sharing_the_game_database_through_the_common_url_is_not_a_collision(self):
         """CF-22 — an alias on the common URL is meant to be the game's database."""
-        apps = [self.app("cf22_app", app_label="cf22_app", alias="xrpl")]
+        apps = [self.app("cf22_app", app_labels="cf22_app", alias="xrpl")]
         shared = f"sqlite:///{os.path.join(GAME_DIR, 'server', 'shared.db3')}"
 
         databases, routers = configure(
@@ -1313,7 +1399,7 @@ class ConfigureTest(unittest.TestCase):
 
     def test_a_consumers_own_routers_are_kept(self):
         """CF-16 — theirs are preserved, ours appended after."""
-        apps = [self.app("cf16_app", app_label="cf16_app", alias="xrpl")]
+        apps = [self.app("cf16_app", app_labels="cf16_app", alias="xrpl")]
         theirs = ["world.routers.MyRouter"]
 
         _, routers = configure(
@@ -1327,8 +1413,8 @@ class ConfigureTest(unittest.TestCase):
     def test_session_options_default_to_empty_and_reach_every_entry(self):
         """CF-15 — default_session_options defaults to empty."""
         apps = [
-            self.app("cf15_one", app_label="cf15_one", alias="one"),
-            self.app("cf15_two", app_label="cf15_two", alias="two"),
+            self.app("cf15_one", app_labels="cf15_one", alias="one"),
+            self.app("cf15_two", app_labels="cf15_two", alias="two"),
         ]
 
         databases, _ = configure(self.game_databases(), apps, GAME_DIR, {})
@@ -1355,7 +1441,7 @@ class ConfigureTest(unittest.TestCase):
         apps = [
             self.app(
                 "cf23_app",
-                app_label="cf23_app",
+                app_labels="cf23_app",
                 alias="xrpl",
                 sqlite_filename="evennia.db3",
             )
@@ -1372,8 +1458,8 @@ class ConfigureTest(unittest.TestCase):
         """CF-24 — one INFO line naming each alias, read back from disk."""
         clear_logs()
         apps = [
-            self.app("cf24_xrpl", app_label="cf24_xrpl", alias="xrpl"),
-            self.app("cf24_bus", app_label="cf24_bus", alias="messagebus"),
+            self.app("cf24_xrpl", app_labels="cf24_xrpl", alias="xrpl"),
+            self.app("cf24_bus", app_labels="cf24_bus", alias="messagebus"),
         ]
 
         configure(self.game_databases(), apps, GAME_DIR, {})
@@ -1418,8 +1504,12 @@ class CheckSettingsTest(unittest.TestCase):
         source = spec_module_source(**spec_fields) if spec_fields else None
         self.apps.add(name, source)
         if requires_us is not None:
-            distribution = name.replace("_", "-")
-            self.distributions[name.split(".")[0]] = [distribution]
+            # One distribution per top-level package, so a nested app is
+            # registered under its parent's rather than one of its own —
+            # which is what shipping two apps in one library looks like.
+            top_level = name.split(".")[0]
+            distribution = top_level.replace("_", "-")
+            self.distributions[top_level] = [distribution]
             self.requirements[distribution] = [requires_us]
         return name
 
@@ -1433,7 +1523,7 @@ class CheckSettingsTest(unittest.TestCase):
         app = self.app(
             "bc01_app",
             requires_us="evennia-database-cascade",
-            app_label="bc01_app",
+            app_labels="bc01_app",
             alias="xrpl",
         )
 
@@ -1473,13 +1563,13 @@ class CheckSettingsTest(unittest.TestCase):
 
     def test_a_declared_alias_present_in_databases_passes(self):
         """BC-06 — every app with a db_spec has its alias in DATABASES."""
-        app = self.app("bc06_app", app_label="bc06_app", alias="xrpl")
+        app = self.app("bc06_app", app_labels="bc06_app", alias="xrpl")
 
         self.assertIsNone(check_settings([app], self.databases_with("xrpl")))
 
     def test_a_declared_alias_missing_from_databases_is_refused(self):
         """BC-07 — an alias absent from DATABASES raises, naming both."""
-        app = self.app("bc07_app", app_label="bc07_app", alias="xrpl")
+        app = self.app("bc07_app", app_labels="bc07_app", alias="xrpl")
 
         with self.assertRaises(ImproperlyConfigured) as caught:
             check_settings([app], self.databases_with())
@@ -1491,8 +1581,8 @@ class CheckSettingsTest(unittest.TestCase):
     def test_two_missing_aliases_are_reported_together(self):
         """BC-08 — two such apps: one raise, naming both."""
         apps = [
-            self.app("bc08_one", app_label="bc08_one", alias="xrpl"),
-            self.app("bc08_two", app_label="bc08_two", alias="messagebus"),
+            self.app("bc08_one", app_labels="bc08_one", alias="xrpl"),
+            self.app("bc08_two", app_labels="bc08_two", alias="messagebus"),
         ]
 
         with self.assertRaises(ImproperlyConfigured) as caught:
@@ -1506,7 +1596,7 @@ class CheckSettingsTest(unittest.TestCase):
         """BC-09 — both kinds at once: one raise, naming all of them."""
         apps = [
             self.app("bc09_silent", requires_us="evennia-database-cascade"),
-            self.app("bc09_absent", app_label="bc09_absent", alias="xrpl"),
+            self.app("bc09_absent", app_labels="bc09_absent", alias="xrpl"),
         ]
 
         with self.assertRaises(ImproperlyConfigured) as caught:
@@ -1515,6 +1605,53 @@ class CheckSettingsTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("bc09_silent", message)
         self.assertIn("xrpl", message)
+
+    def test_a_sibling_app_covered_by_the_libraries_spec_passes(self):
+        """BC-13 — one spec answers for every app its distribution ships.
+
+        The shape the tuple exists to serve: a library with two apps sharing
+        one database declares them in one spec, on the app that ships it.
+        """
+        declaring = self.app(
+            "bc13_lib",
+            requires_us="evennia-database-cascade",
+            app_labels=("bc13_lib", "bc13_lib_extra"),
+            alias="xrpl",
+        )
+        sibling = self.app("bc13_lib.extra", requires_us="evennia-database-cascade")
+
+        self.assertIsNone(
+            check_settings([declaring, sibling], self.databases_with("xrpl"))
+        )
+
+    def test_one_librarys_spec_does_not_satisfy_another(self):
+        """BC-14 — a declaring library does not cover an unrelated silent one."""
+        declaring = self.app(
+            "bc14_lib",
+            requires_us="evennia-database-cascade",
+            app_labels="bc14_lib",
+            alias="xrpl",
+        )
+        silent = self.app("bc14_other", requires_us="evennia-database-cascade")
+
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            check_settings([declaring, silent], self.databases_with("xrpl"))
+
+        self.assertIn("bc14_other", str(caught.exception))
+
+    def test_the_declaring_sibling_may_come_last(self):
+        """BC-15 — ordering in INSTALLED_APPS cannot decide the answer."""
+        sibling = self.app("bc15_lib.extra", requires_us="evennia-database-cascade")
+        declaring = self.app(
+            "bc15_lib",
+            requires_us="evennia-database-cascade",
+            app_labels=("bc15_lib", "bc15_lib_extra"),
+            alias="xrpl",
+        )
+
+        self.assertIsNone(
+            check_settings([sibling, declaring], self.databases_with("xrpl"))
+        )
 
     def test_ready_calls_the_check(self):
         """BC-12 — ready() calls check_settings, so it cannot go unrun."""
@@ -1531,7 +1668,7 @@ class CheckSettingsTest(unittest.TestCase):
         app = self.app(
             "bc10_app",
             requires_us="evennia-database-cascade",
-            app_label="bc10_app",
+            app_labels="bc10_app",
             alias="xrpl",
         )
 
@@ -1596,7 +1733,7 @@ class MigrateAllTest(unittest.TestCase):
 
     def test_the_bare_migrate_runs_first(self):
         """MG-01 — runs a bare migrate before anything else."""
-        app = self.app("mg01_app", app_label="mg01_app", alias="xrpl")
+        app = self.app("mg01_app", app_labels="mg01_app", alias="xrpl")
 
         migrate_all([app], {})
 
@@ -1605,8 +1742,8 @@ class MigrateAllTest(unittest.TestCase):
     def test_each_split_alias_gets_its_own_call_in_spec_order(self):
         """MG-02 — one migrate --database per split alias, in spec order."""
         apps = [
-            self.app("mg02_bus", app_label="mg02_bus", alias="messagebus"),
-            self.app("mg02_xrpl", app_label="mg02_xrpl", alias="xrpl"),
+            self.app("mg02_bus", app_labels="mg02_bus", alias="messagebus"),
+            self.app("mg02_xrpl", app_labels="mg02_xrpl", alias="xrpl"),
         ]
 
         migrate_all(apps, {})
@@ -1615,7 +1752,7 @@ class MigrateAllTest(unittest.TestCase):
 
     def test_nothing_split_means_the_bare_call_only(self):
         """MG-03 — no split aliases: the bare call and nothing else."""
-        app = self.app("mg03_app", app_label="mg03_app", alias="xrpl")
+        app = self.app("mg03_app", app_labels="mg03_app", alias="xrpl")
 
         migrate_all([app], {"DATABASE_URL": COMMON_URL})
 
@@ -1624,7 +1761,7 @@ class MigrateAllTest(unittest.TestCase):
 
     def test_the_split_set_comes_from_split_aliases(self):
         """MG-04 — the split set is split_aliases' answer, not a second rule."""
-        app = self.app("mg04_app", app_label="mg04_app", alias="xrpl")
+        app = self.app("mg04_app", app_labels="mg04_app", alias="xrpl")
 
         with mock.patch.object(
             migrate_module, "split_aliases", return_value=[]
@@ -1637,8 +1774,8 @@ class MigrateAllTest(unittest.TestCase):
     def test_an_unsplit_alias_never_gets_its_own_call(self):
         """MG-05 — the bare migrate already covered it."""
         apps = [
-            self.app("mg05_shared", app_label="mg05_shared", alias="shared"),
-            self.app("mg05_own", app_label="mg05_own", alias="own"),
+            self.app("mg05_shared", app_labels="mg05_shared", alias="shared"),
+            self.app("mg05_own", app_labels="mg05_own", alias="own"),
         ]
         env = {"DATABASE_URL": COMMON_URL, "DATABASE_URL_OWN": OWN_URL}
 
@@ -1648,7 +1785,7 @@ class MigrateAllTest(unittest.TestCase):
 
     def test_a_failing_migrate_propagates(self):
         """MG-06 — a failing migrate reaches the caller rather than being swallowed."""
-        app = self.app("mg06_app", app_label="mg06_app", alias="xrpl")
+        app = self.app("mg06_app", app_labels="mg06_app", alias="xrpl")
 
         # ValueError, not RuntimeError: NotImplementedError subclasses
         # RuntimeError, so a stubbed migrate_all would satisfy the assertion
@@ -1667,7 +1804,7 @@ class MigrateAllTest(unittest.TestCase):
         with mock.patch.object(
             migrate_module, "get_common_url_var", lambda: "GAME_DATABASE_URL"
         ):
-            app = self.app("mg08_app", app_label="mg08_app", alias="xrpl")
+            app = self.app("mg08_app", app_labels="mg08_app", alias="xrpl")
             migrate_all([app], {"GAME_DATABASE_URL": COMMON_URL})
 
         self.assertEqual(self.aliases_migrated(), [])
@@ -1676,7 +1813,7 @@ class MigrateAllTest(unittest.TestCase):
         """MG-11 — nothing missing, so the migrations run normally."""
         app = self.app(
             "mg11_app",
-            app_label="mg11_app",
+            app_labels="mg11_app",
             alias="ai_memory",
             required_extensions=("vector",),
         )
@@ -1690,7 +1827,7 @@ class MigrateAllTest(unittest.TestCase):
         """MG-12 — raises first, naming the extension and the command."""
         app = self.app(
             "mg12_app",
-            app_label="mg12_app",
+            app_labels="mg12_app",
             alias="ai_memory",
             required_extensions=("vector",),
         )
@@ -1709,13 +1846,13 @@ class MigrateAllTest(unittest.TestCase):
         apps = [
             self.app(
                 "mg13_one",
-                app_label="mg13_one",
+                app_labels="mg13_one",
                 alias="one",
                 required_extensions=("vector",),
             ),
             self.app(
                 "mg13_two",
-                app_label="mg13_two",
+                app_labels="mg13_two",
                 alias="two",
                 required_extensions=("postgis",),
             ),
@@ -1732,7 +1869,7 @@ class MigrateAllTest(unittest.TestCase):
         """MG-14 — there are no extensions to have on SQLite."""
         app = self.app(
             "mg14_app",
-            app_label="mg14_app",
+            app_labels="mg14_app",
             alias="xrpl",
             required_extensions=("vector",),
         )
@@ -1755,7 +1892,7 @@ class MigrateAllTest(unittest.TestCase):
 
     def test_options_are_forwarded_and_database_is_refused(self):
         """MG-10 — options pass through; a caller-supplied database raises."""
-        app = self.app("mg10_app", app_label="mg10_app", alias="xrpl")
+        app = self.app("mg10_app", app_labels="mg10_app", alias="xrpl")
 
         migrate_all([app], {}, verbosity=2, interactive=False)
 
@@ -1769,7 +1906,7 @@ class MigrateAllTest(unittest.TestCase):
         clear_logs()
         app = self.app(
             "mg15_app",
-            app_label="mg15_app",
+            app_labels="mg15_app",
             alias="ai_memory",
             required_extensions=("vector",),
         )
@@ -1785,8 +1922,8 @@ class MigrateAllTest(unittest.TestCase):
         """MG-16 — one INFO line naming the bare migrate and each alias."""
         clear_logs()
         apps = [
-            self.app("mg16_bus", app_label="mg16_bus", alias="messagebus"),
-            self.app("mg16_xrpl", app_label="mg16_xrpl", alias="xrpl"),
+            self.app("mg16_bus", app_labels="mg16_bus", alias="messagebus"),
+            self.app("mg16_xrpl", app_labels="mg16_xrpl", alias="xrpl"),
         ]
 
         migrate_all(apps, {})

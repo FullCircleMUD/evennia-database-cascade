@@ -3,6 +3,6 @@
 from evennia_database_cascade import AliasSpec
 
 SPEC = AliasSpec(
-    app_label="demo_app",
+    app_labels="demo_app",
     alias="demogame",
 )

@@ -200,6 +200,71 @@ def _app_package(app):
     return None
 
 
+def _spec_problems(spec):
+    """The shape problems one spec has on its own, as messages.
+
+    The one per-spec rule, read by both ``spec_is_valid`` and
+    ``validate_specs`` — factored so the consumer's contract check and the
+    configure-time refusal cannot drift.
+    """
+    problems = []
+    named = ", ".join(
+        label for label in spec.app_labels if label.strip()
+    ) or "<no app labels>"
+
+    if not spec.alias.strip():
+        problems.append(
+            f"{named} declares an empty alias. The alias names the "
+            f"DATABASES key, and the environment variable that can give it "
+            f"a database of its own derives from it."
+        )
+    elif spec.alias == "default":
+        problems.append(
+            f"{named} claims the alias 'default'. That is Django's own "
+            f"connection, so taking it would replace the game's database "
+            f"with this library's. Choose an alias of its own."
+        )
+    elif not ENVIRONMENT_NAME.match(spec.alias):
+        problems.append(
+            f"{named} declares the alias {spec.alias!r}, which cannot name "
+            f"an environment variable. The alias becomes "
+            f"{ALIAS_URL_PREFIX}<ALIAS>, so use letters, digits and "
+            f"underscores only, and do not start with a digit."
+        )
+
+    if not spec.app_labels or not all(
+        label.strip() for label in spec.app_labels
+    ):
+        problems.append(
+            f"The spec for alias {spec.alias!r} declares no usable app "
+            f"labels. The router matches models on them, so without one "
+            f"nothing reaches that alias."
+        )
+
+    return problems
+
+
+def spec_is_valid(spec):
+    """Is this one spec well-shaped? The one-line consumer contract check.
+
+    A library shipping a ``db_spec`` asserts this in its own suite::
+
+        assert spec_is_valid(SPEC)
+
+    so its tests go red when this library tightens the shape rules, before a
+    deployment finds out. Per-spec shape only: the cross-spec collisions
+    need every spec in hand and stay with ``validate_specs``, which applies
+    the same per-spec rule.
+
+    Args:
+        spec (AliasSpec): the spec to judge.
+
+    Returns:
+        bool: True where the spec is usable.
+    """
+    return not _spec_problems(spec)
+
+
 def validate_specs(specs):
     """Refuse a set of specs that says something unusable.
 
@@ -227,43 +292,18 @@ def validate_specs(specs):
     problems = []
 
     for spec in specs:
-        if not spec.alias.strip():
-            problems.append(
-                f"{spec.app_label or '<no app label>'} declares an empty "
-                f"alias. The alias names the DATABASES key, and the "
-                f"environment variable that can give it a database of its "
-                f"own derives from it."
-            )
-        elif spec.alias == "default":
-            problems.append(
-                f"{spec.app_label} claims the alias 'default'. That is "
-                f"Django's own connection, so taking it would replace the "
-                f"game's database with this library's. Choose an alias of "
-                f"its own."
-            )
-        elif not ENVIRONMENT_NAME.match(spec.alias):
-            problems.append(
-                f"{spec.app_label} declares the alias {spec.alias!r}, which "
-                f"cannot name an environment variable. The alias becomes "
-                f"{ALIAS_URL_PREFIX}<ALIAS>, so use letters, digits and "
-                f"underscores only, and do not start with a digit."
-            )
+        problems.extend(_spec_problems(spec))
 
-        if not spec.app_label.strip():
-            problems.append(
-                f"The spec for alias {spec.alias!r} declares an empty "
-                f"app_label. The router matches models on it, so without "
-                f"one nothing reaches that alias."
-            )
-
-    for alias, held in _sharing(specs, "alias").items():
-        labels = ", ".join(sorted(spec.app_label for spec in held))
+    for alias, held in _sharing_an_alias(specs).items():
+        labels = ", ".join(
+            sorted(label for spec in held for label in spec.app_labels)
+        )
         problems.append(
             f"{labels} all claim the alias {alias!r}. An alias is one "
-            f"database connection and only one app can own it."
+            f"database connection and only one spec can own it."
         )
 
-    for app_label, held in _sharing(specs, "app_label").items():
+    for app_label, held in _sharing_a_label(specs).items():
         aliases = ", ".join(sorted(spec.alias for spec in held))
         problems.append(
             f"{app_label!r} is declared against more than one alias "
@@ -279,22 +319,42 @@ def validate_specs(specs):
         raise SpecValidationError(message)
 
 
-def _sharing(specs, attribute):
-    """Specs grouped by a value more than one of them declares.
+def _sharing_an_alias(specs):
+    """Specs grouped by an alias more than one of them claims.
 
     Blank values are left out — an empty alias is already its own problem,
     and reporting two of them as a collision would say the wrong thing.
 
     Args:
         specs (list): the specs to group.
-        attribute (str): the field to group on.
 
     Returns:
-        dict: value -> the specs declaring it, for values held more than once.
+        dict: alias -> the specs claiming it, for aliases held more than once.
     """
     groups = {}
     for spec in specs:
-        value = getattr(spec, attribute).strip()
-        if value:
-            groups.setdefault(value, []).append(spec)
-    return {value: held for value, held in groups.items() if len(held) > 1}
+        if spec.alias.strip():
+            groups.setdefault(spec.alias, []).append(spec)
+    return {alias: held for alias, held in groups.items() if len(held) > 1}
+
+
+def _sharing_a_label(specs):
+    """Specs grouped by an app label more than one of them declares.
+
+    Flattened across each spec's tuple: the collision is one label in two
+    specs, wherever it sits in either tuple. A label repeated inside one
+    spec's own tuple is not a collision — deduplicated per spec so it is not
+    reported as one. Blank labels are left out, as above.
+
+    Args:
+        specs (list): the specs to group.
+
+    Returns:
+        dict: label -> the specs declaring it, for labels held more than once.
+    """
+    groups = {}
+    for spec in specs:
+        for label in dict.fromkeys(spec.app_labels):
+            if label.strip():
+                groups.setdefault(label, []).append(spec)
+    return {label: held for label, held in groups.items() if len(held) > 1}

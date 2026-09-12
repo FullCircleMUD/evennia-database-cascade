@@ -35,7 +35,7 @@ declares one the same way. Put it in a module called `db_spec` that imports noth
 from evennia_database_cascade import AliasSpec
 
 SPEC = AliasSpec(
-    app_label="my_app",
+    app_labels="my_app",
     alias="my_alias",
 )
 ```
@@ -44,7 +44,7 @@ Two fields are required and six have defaults:
 
 | Field | Default | What it says |
 |---|---|---|
-| `app_label` | required | The Django app label the router matches models on — `model._meta.app_label` |
+| `app_labels` | required | The Django app labels the router matches models on — each model's `model._meta.app_label`. A tuple for an app set that shares one database; a bare string is kept as a one-tuple |
 | `alias` | required | The `DATABASES` key. `migrate --database <alias>` takes it, and `DATABASE_URL_<ALIAS>` derives from it |
 | `sqlite_filename` | `<alias>.db3` | The file this alias falls back to when no URL names a database for it |
 | `allow_sharing_common_db` | `True` | May this alias live in the database the common URL names? |
@@ -64,7 +64,26 @@ archive and `objectdb` in the game are the same forty-two table names.
 **Set `allow_foreign_tables_in_own_db=True`** only where that is the point — the same schema clone is
 the example, since Evennia's own tables are exactly what belongs in the archive.
 
-## 4. Make the call
+## 4. Test your spec
+
+In the suite of whatever declares the spec — the library, or a game with a spec of its own — add
+one test:
+
+```python
+from evennia_database_cascade import spec_is_valid
+
+from my_library.db_spec import SPEC
+
+
+def test_the_spec_is_valid():
+    assert spec_is_valid(SPEC)
+```
+
+It needs no Django setup — the spec modules are Django-free by design. The point is the contract:
+when this library tightens the shape rules, that test goes red in your suite, so you find out from
+your own CI rather than from a deployment.
+
+## 5. Make the call
 
 One call, after your `INSTALLED_APPS` edits, in the same settings module:
 
@@ -127,7 +146,7 @@ None of this duplicates configuration. Every argument the call takes is per-inst
 `GAME_DIR` differs on each, and with it every alias's resolved path, so the same lines are correct in
 each file. [evennia-scaling](../../evennia-scaling/examples) does this across three instances.
 
-## 5. Choose where each alias lives
+## 6. Choose where each alias lives
 
 Per alias, in the deployment's environment. Three rungs, first match wins:
 
@@ -148,7 +167,7 @@ An alias whose spec sets `allow_sharing_common_db=False` refuses the middle rung
 following it, so `DATABASE_URL` alone is an error for it. Give it its own variable or leave it on
 SQLite.
 
-## 6. Migrate
+## 7. Migrate
 
 ```
 evennia cascade_migrate
@@ -181,7 +200,7 @@ it is the same code, and the command is a four-line wrapper.
 ## Required settings
 
 **None.** Everything the library needs arrives as arguments to `configure()` or as the environment
-variables in step 5 — deliberately, since the settings module is still executing when `configure()`
+variables in step 6 — deliberately, since the settings module is still executing when `configure()`
 runs, so nothing can read `settings.X` at that point.
 
 ## Optional settings
@@ -264,6 +283,10 @@ to whichever library stores the vectors rather than to the deployment.
 - **That your own game's `db_spec` exists.** A library that depends on this one and ships no spec is
   caught at boot, by reading its distribution's requirements. A gamedir is not a distribution, so
   there is nothing to read and nothing to check.
+- **That a library's spec covers every app it ships.** One `db_spec` answers for the whole
+  distribution, so a library with several apps declares them in one spec's `app_labels`. The boot
+  check sees that the library declared *something*; it does not check that the labels name every app.
+  Leave one out and its models fall through to `default`, silently.
 - **That `DATABASE_URL_<ALIAS>` points where you meant.** The environment is the declaration; the
   library reads it and does not second-guess it. A URL naming the wrong host resolves cleanly and
   fails at first connection.

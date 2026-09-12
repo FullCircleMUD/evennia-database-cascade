@@ -133,6 +133,13 @@ def check_settings(installed_apps=None, databases=None):
     The message names the library, because whoever reads it is not whoever
     can fix it.
 
+    **One ``db_spec`` answers for the whole library.** A spec declaring
+    several app labels is how a library whose apps share one database
+    declares them, so a second app shipping none of its own has declared an
+    alias just the same. What is not checked is whether that spec's
+    ``app_labels`` actually name the second app — a library covering only
+    some of its apps passes here.
+
     **Did every declared alias reach ``DATABASES``?** What it catches is
     ``configure()`` being called before the consumer's ``INSTALLED_APPS``
     edits, or not called at all.
@@ -163,21 +170,30 @@ def check_settings(installed_apps=None, databases=None):
         databases = get_databases()
 
     problems = []
+    specs = discover_specs(installed_apps)
+
+    # Which libraries declared an alias, by top-level package — the
+    # granularity _depends_on_us already asks the requirement question at.
+    # One spec answers for its whole distribution, because a spec declaring
+    # several app labels is how a library with more than one app declares
+    # them; demanding one per app would refuse that shape outright. Built
+    # before the loop, so where the declaring app sits in INSTALLED_APPS
+    # cannot change the answer.
+    declaring = {app.split(".")[0] for app in installed_apps if _has_a_spec(app)}
 
     for app in installed_apps:
-        if _depends_on_us(app) and not _has_a_spec(app):
+        if _depends_on_us(app) and app.split(".")[0] not in declaring:
             problems.append(
-                f"{app} depends on {DISTRIBUTION_NAME} and ships no "
-                f"{SPEC_MODULE_NAME} module, so it never declared an alias. "
-                f"Its tables will be created in the game database. This is "
-                f"that library's own packaging fault — report it there."
+                f"{app} depends on {DISTRIBUTION_NAME} and nothing it ships "
+                f"declares a {SPEC_MODULE_NAME} module, so it never declared "
+                f"an alias. Its tables will be created in the game database. "
+                f"This is that library's own packaging fault — report it there."
             )
 
-    specs = discover_specs(installed_apps)
     for spec in specs:
         if spec.alias not in databases:
             problems.append(
-                f"{spec.app_label} declares the alias {spec.alias!r}, which "
+                f"{', '.join(spec.app_labels)} declares the alias {spec.alias!r}, which "
                 f"is not in DATABASES. Either configure() was not called, or "
                 f"it ran above the INSTALLED_APPS entry for that app."
             )

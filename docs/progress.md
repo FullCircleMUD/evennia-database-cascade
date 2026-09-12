@@ -197,7 +197,7 @@ Only `ModuleNotFoundError` is intercepted. Anything else a `db_spec` raises prop
 a consumer whose spec has a genuine bug in it reads their own traceback with nothing of ours in the
 middle. Case `DS-06`.
 
-**`AliasSpec`** is a frozen dataclass with five fields: `app_label`, `alias`, `sqlite_filename`, and
+**`AliasSpec`** is a frozen dataclass with five fields: `app_labels`, `alias`, `sqlite_filename`, and
 the two permissions — `allow_sharing_common_db` and `allow_foreign_tables_in_own_db`. The two
 `allow_` fields are the outbound and inbound halves of one question, named at length because they are
 read by someone installing a library rather than by us. `evennia-archive` is the library that needs

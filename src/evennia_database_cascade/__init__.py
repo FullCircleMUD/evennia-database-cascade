@@ -15,8 +15,9 @@ library commits to covering.
 """
 
 from .configure import configure
+from .discovery import spec_is_valid
 from .spec import AliasSpec
 
-__all__ = ["AliasSpec", "configure"]
+__all__ = ["AliasSpec", "configure", "spec_is_valid"]
 
 __version__ = "0.0.1"

@@ -155,7 +155,12 @@ import os
 
 from evennia_database_cascade import configure
 
-INSTALLED_APPS += ["evennia_database_cascade", "demo_library", "demo_app"]
+INSTALLED_APPS += [
+    "evennia_database_cascade",
+    "demo_library",
+    "demo_library.extra",
+    "demo_app",
+]
 
 # After the INSTALLED_APPS edits above, and before anything reads DATABASES.
 DATABASES, DATABASE_ROUTERS = configure(

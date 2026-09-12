@@ -24,11 +24,11 @@ wrong database. Reaching an archived copy is explicit, with
 
 
 class CascadeRouter:
-    """Routes one app's models to one alias.
+    """Routes its apps' models to one alias.
 
     Args:
         spec (AliasSpec): the alias this router serves. Three of its fields
-            are read — ``app_label``, ``alias``, and
+            are read — ``app_labels``, ``alias``, and
             ``allow_foreign_tables_in_own_db``.
     """
 
@@ -36,8 +36,8 @@ class CascadeRouter:
         self.spec = spec
 
     def _is_ours(self, model):
-        """Is this one of the models our app owns?"""
-        return model._meta.app_label == self.spec.app_label
+        """Is this a model of one of the apps we own?"""
+        return model._meta.app_label in self.spec.app_labels
 
     def db_for_read(self, model, **hints):
         """The alias for one of our models, and ``None`` for anyone else's.
@@ -60,9 +60,9 @@ class CascadeRouter:
         return None
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):
-        """Where this app's tables may be created, and who may join ours.
+        """Where our apps' tables may be created, and who may join ours.
 
-        Our own app belongs on our own alias and nowhere else — without the
+        Our own apps belong on our own alias and nowhere else — without the
         refusal a bare ``evennia migrate`` creates our tables in the game
         database too, and the separation exists only on paper.
 
@@ -72,7 +72,7 @@ class CascadeRouter:
         rather than approving is what lets this coexist with a consumer's own
         routers instead of overruling them.
         """
-        if app_label == self.spec.app_label:
+        if app_label in self.spec.app_labels:
             return db == self.spec.alias
         if db == self.spec.alias and not self.spec.allow_foreign_tables_in_own_db:
             return False

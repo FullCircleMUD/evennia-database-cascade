@@ -21,6 +21,7 @@ that file is source material, not a commitment.
 | `DS` | `discover_specs` — finding the specs the installed apps declare |
 | `SP` | `AliasSpec` — what a library declares about its alias |
 | `VS` | `validate_specs` — judging the specs once they are all in hand |
+| `SV` | `spec_is_valid` — the one-line consumer contract check |
 | `RS` | `resolve_database` — the three rungs, for one spec |
 | `SL` | `is_split` and `split_aliases` — which aliases are on a database of their own |
 | `RT` | `CascadeRouter` — one parameterised router, built from a spec |
@@ -76,13 +77,13 @@ installing a library, not by us, and each is a permission rather than a state.
 
 | ID | Case | Test function |
 |---|---|---|
-| SP-01 | A spec carries the five fields, with the values it was given | `test_a_spec_carries_the_values_it_was_given` |
+| SP-01 | A spec carries the fields, with the values it was given — a multi-label `app_labels` tuple kept as declared | `test_a_spec_carries_the_values_it_was_given` |
 | SP-02 | `sqlite_filename` defaults to `f"{alias}.db3"` | `test_sqlite_filename_defaults_to_the_alias` |
 | SP-03 | An explicit `sqlite_filename` is kept, not overwritten by the default | `test_an_explicit_sqlite_filename_is_kept` |
 | SP-04 | `allow_sharing_common_db` defaults to `True` | `test_sharing_the_common_db_is_allowed_by_default` |
 | SP-05 | `allow_foreign_tables_in_own_db` defaults to `False` | `test_foreign_tables_are_refused_by_default` |
-| SP-06 | `app_label` and `alias` are independent — a spec whose two differ keeps both | `test_app_label_and_alias_are_independent` |
-| SP-07 | `app_label` and `alias` are required; omitting either raises | `test_app_label_and_alias_are_required` |
+| SP-06 | `app_labels` and `alias` are independent — a spec whose two differ keeps both | `test_app_labels_and_alias_are_independent` |
+| SP-07 | `app_labels` and `alias` are required; omitting either raises | `test_app_labels_and_alias_are_required` |
 | SP-08 | The spec is frozen — assigning to a field raises. Free from `frozen=True`; the case exists so a later change cannot quietly remove it | `test_a_spec_is_frozen` |
 | SP-09 | An unknown field name raises at construction. This is the "typos fail loudly" property that chose a dataclass over a dict | `test_an_unknown_field_raises` |
 | SP-10 | `spec.py` imports nothing from Django. Read off the module's AST — importing it inside the suite proves nothing, because Django is configured there. Likely becomes a cross-cutting case over every module on the settings path | `test_spec_module_imports_nothing_from_django` |
@@ -92,6 +93,7 @@ installing a library, not by us, and each is a permission rather than a state.
 | SP-14 | A spec that sets `session_options` keeps the mapping it was given | `test_a_spec_keeps_the_session_options_it_was_given` |
 | SP-15 | `required_extensions` defaults to empty | `test_required_extensions_are_empty_by_default` |
 | SP-16 | A spec that declares extensions keeps them | `test_a_spec_keeps_the_extensions_it_declared` |
+| SP-17 | A bare string `app_labels` arrives as a one-tuple. The singular declaration stays terse, and a forgotten trailing comma cannot leave a string in the field for the router to substring-match | `test_a_bare_string_app_labels_becomes_a_one_tuple` |
 
 ## VS — `validate_specs(specs)`
 
@@ -109,13 +111,33 @@ SQLite — on Postgres there is no file to collide with.
 | VS-01 | A valid list passes and returns nothing | `test_a_valid_list_passes` |
 | VS-02 | An empty list passes | `test_an_empty_list_passes` |
 | VS-03 | Two specs claiming one alias raise, naming both app labels | `test_two_specs_claiming_one_alias_raise` |
-| VS-04 | Two specs claiming one `app_label` raise, naming both aliases | `test_two_specs_claiming_one_app_label_raise` |
-| VS-05 | An empty or whitespace-only `alias` raises | `test_an_empty_alias_raises` |
-| VS-06 | An empty or whitespace-only `app_label` raises | `test_an_empty_app_label_raises` |
-| VS-07 | An alias of `"default"` raises. Django's implicit alias cannot be renamed, so the literal string is exact rather than a guess — and a spec claiming it would replace the game's own connection | `test_an_alias_of_default_raises` |
+| VS-04 | One app label appearing in two specs' `app_labels` raises, naming both aliases | `test_two_specs_claiming_one_app_label_raise` |
+| VS-05 | **Retired — replaced by SV-03.** The per-field shape checks are `spec_is_valid`'s; SV-07 pins that `validate_specs` still applies them | — |
+| VS-06 | **Retired — replaced by SV-02.** | — |
+| VS-07 | **Retired — replaced by SV-04.** | — |
 | VS-08 | Several problems at once produce one raise, naming all of them | `test_every_problem_is_reported_in_one_raise` |
-| VS-09 | An alias that is not a valid environment-variable name raises — a hyphen, a space, a leading digit. The alias becomes `DATABASE_URL_<ALIAS>`, so one no shell can export is an alias nobody can deploy | `test_an_alias_that_cannot_be_an_environment_variable_raises` |
+| VS-09 | **Retired — replaced by SV-05.** | — |
 | VS-10 | An invalid spec set is logged at ERROR before `SpecValidationError` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_an_invalid_spec_set_is_logged_before_the_raise` |
+
+## SV — `spec_is_valid(spec)`
+
+The one-line consumer contract check. A library that ships a `db_spec` adds one unit test —
+`assert spec_is_valid(SPEC)` — and its suite goes red whenever this library tightens the shape rules,
+which is how a spec change here reaches every downstream repo before deployment does.
+
+It answers with a boolean rather than a raise, so it drops straight into an assertion. Per-spec shape
+only: the cross-spec collisions stay in `validate_specs`, because a single library cannot see them.
+`validate_specs` applies the same per-spec rule — SV-07 is what stops the two drifting.
+
+| ID | Case | Test function |
+|---|---|---|
+| SV-01 | A well-shaped spec is valid — single-label and multi-label | `test_a_well_shaped_spec_is_valid` |
+| SV-02 | An empty `app_labels` tuple, or a blank or whitespace-only entry within one, is invalid | `test_empty_or_blank_app_labels_are_invalid` |
+| SV-03 | An empty or whitespace-only `alias` is invalid | `test_an_empty_alias_is_invalid` |
+| SV-04 | An alias of `"default"` is invalid. Django's implicit alias cannot be renamed, so the literal string is exact rather than a guess — and a spec claiming it would replace the game's own connection | `test_an_alias_of_default_is_invalid` |
+| SV-05 | An alias that is not a valid environment-variable name is invalid — a hyphen, a space, a leading digit. The alias becomes `DATABASE_URL_<ALIAS>`, so one no shell can export is an alias nobody can deploy | `test_an_alias_that_cannot_be_an_environment_variable_is_invalid` |
+| SV-06 | Exported from the package root, so a consumer imports it the way they import `AliasSpec` | `test_spec_is_valid_is_exported_from_the_package_root` |
+| SV-07 | Every shape it refuses, `validate_specs` refuses too — the consumer check and the configure-time check read one rule and cannot drift | `test_every_refused_shape_is_refused_by_validate_specs` |
 
 ## RS — `resolve_database(spec, game_dir, env, common_url_var)`
 
@@ -205,8 +227,12 @@ is the archive library's code rather than the router's.
 | RT-09 | `allow_relation` is `True` when both models are its own | `test_a_relation_between_two_of_ours_is_allowed` |
 | RT-10 | `allow_relation` is `None` otherwise, whether one or both are foreign | `test_a_relation_touching_a_foreign_model_gets_no_opinion` |
 | RT-11 | Two routers built from different specs each answer only for their own app — the co-installed case | `test_two_routers_each_answer_only_for_their_own_app` |
-| RT-12 | A spec whose `app_label` and `alias` differ routes on the app label and returns the alias | `test_the_app_label_and_the_alias_are_read_separately` |
+| RT-12 | A spec whose `app_labels` and `alias` differ routes on the labels and returns the alias | `test_the_app_labels_and_the_alias_are_read_separately` |
 | RT-13 | `router.py` imports nothing from Django | `test_router_module_imports_nothing_from_django` |
+| RT-14 | A two-label spec: reads and writes of a model of either label go to the alias | `test_models_of_every_label_route_to_the_alias` |
+| RT-15 | A two-label spec: `allow_migrate` is `True` for each label on its alias, and `False` for each anywhere else | `test_each_label_migrates_onto_the_alias_and_nowhere_else` |
+| RT-16 | `allow_relation` is `True` between models of two different labels of one spec — one spec is one database | `test_a_relation_between_two_of_our_labels_is_allowed` |
+| RT-17 | A foreign label that is a substring of one of ours gets no routing answer and no migrate approval — membership over the tuple, never substring matching | `test_a_foreign_label_matching_a_substring_gets_no_answer` |
 
 ## CF — `configure(databases, installed_apps, game_dir, env, common_url_var)`
 
@@ -265,6 +291,13 @@ this library and shipping no `db_spec` is a fault: its alias is never configured
 through to `default`, and the game runs with its tables in the database they exist to stay out of.
 The message names the library, because the person reading it is not the person who can fix it.
 
+**One `db_spec` answers for the whole library.** A spec declaring several app labels is how a library
+whose apps share one database declares them, so a second app shipping none of its own has declared an
+alias just the same. Both halves of the question therefore ask at the top-level package — the
+granularity the requirement lookup already uses. What this does not check is whether the spec's
+`app_labels` actually name that second app: a library covering only some of its apps passes here, and
+that is recorded in `installing.md` rather than caught.
+
 **Did every declared alias reach `DATABASES`?** The consequence of `configure()` being called before
 the consumer's `INSTALLED_APPS` edits, or not at all.
 
@@ -275,7 +308,7 @@ goes inside the function, so `config.py` stays importable from a settings module
 | ID | Case | Test function |
 |---|---|---|
 | BC-01 | An app whose distribution requires this library and has a `db_spec` — passes | `test_a_dependent_app_declaring_a_spec_passes` |
-| BC-02 | An app whose distribution requires this library and has no `db_spec` — raises, naming the app and the distribution | `test_a_dependent_app_with_no_spec_is_refused` |
+| BC-02 | An app whose distribution requires this library and where **nothing it ships** declares a `db_spec` — raises, naming the app and the distribution | `test_a_dependent_app_with_no_spec_is_refused` |
 | BC-03 | A requirement carrying an `extra ==` marker is skipped. An optional dependency is not a promise to declare an alias | `test_an_optional_dependency_is_skipped` |
 | BC-04 | An app whose distribution does not require this library is ignored, `db_spec` or not | `test_an_app_not_depending_on_us_is_ignored` |
 | BC-05 | An app with no distribution at all — a gamedir module — is ignored. There is no metadata to read | `test_an_app_with_no_distribution_is_ignored` |
@@ -286,6 +319,9 @@ goes inside the function, so `config.py` stays importable from a settings module
 | BC-10 | A clean run writes an INFO line to `cascade.log` — asserted by reading the file back from disk, never by mocking the shim | `test_a_clean_run_writes_an_info_line_to_disk` |
 | BC-11 | A refusal is logged to `cascade.log` at ERROR before the raise, carrying the same problem text as the exception — read back from disk, never mocked | `test_a_refusal_is_logged_to_disk_before_the_raise` |
 | BC-12 | `ready()` calls the check, so it cannot be defined and never run | `test_ready_calls_the_check` |
+| BC-13 | A second app in a distribution whose sibling ships the `db_spec` passes. One spec declaring several app labels is how a library with more than one app declares them, so demanding a spec per app would refuse the shape the tuple exists to serve | `test_a_sibling_app_covered_by_the_libraries_spec_passes` |
+| BC-14 | A declaring library does not satisfy an unrelated one — a silent library is still refused when some other app in `INSTALLED_APPS` declares a spec. The one that catches "any spec anywhere will do" | `test_one_librarys_spec_does_not_satisfy_another` |
+| BC-15 | The declaring sibling may sit anywhere in `INSTALLED_APPS`, including below the app it covers. The set of declaring libraries is built before the apps are judged, so ordering cannot decide the answer | `test_the_declaring_sibling_may_come_last` |
 
 ## MG — `migrate_all()` and `evennia cascade_migrate`
 

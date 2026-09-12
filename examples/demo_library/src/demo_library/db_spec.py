@@ -7,6 +7,6 @@ while it is still executing, before django.setup().
 from evennia_database_cascade import AliasSpec
 
 SPEC = AliasSpec(
-    app_label="demo_library",
+    app_labels=("demo_library", "demo_library_extra"),
     alias="demolib",
 )

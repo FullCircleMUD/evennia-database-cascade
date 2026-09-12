@@ -22,8 +22,12 @@ class AliasSpec:
     """One library's declaration of the alias it owns.
 
     Args:
-        app_label (str): the Django app label the router matches models on —
-            ``model._meta.app_label``. Required.
+        app_labels (tuple): the Django app labels the router matches models
+            on — each model's ``model._meta.app_label``. A bare string is
+            kept as a one-tuple, so the common single-app library declares
+            ``app_labels="my_app"`` and a forgotten trailing comma cannot
+            leave a string in the field for the router to substring-match.
+            Required.
         alias (str): the ``DATABASES`` key the alias is known by, what the
             router returns from ``db_for_read``/``db_for_write``, and what
             ``migrate --database <alias>`` takes. The environment variable
@@ -65,7 +69,7 @@ class AliasSpec:
     hands back the object it found rather than a copy.
     """
 
-    app_label: str
+    app_labels: tuple
     alias: str
     sqlite_filename: str = ""
     allow_sharing_common_db: bool = True
@@ -79,5 +83,7 @@ class AliasSpec:
         # depends on another field. `object.__setattr__` is how a frozen
         # dataclass fills in a computed value — a plain assignment would hit
         # the freeze this class exists to have.
+        if isinstance(self.app_labels, str):
+            object.__setattr__(self, "app_labels", (self.app_labels,))
         if not self.sqlite_filename:
             object.__setattr__(self, "sqlite_filename", f"{self.alias}.db3")
