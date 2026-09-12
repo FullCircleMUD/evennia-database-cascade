@@ -81,22 +81,19 @@ Run on 2026-09-12:
   No demo table reached the game database, which is the separation the whole library is for.
 - **Rows follow the tables.** An ORM write and read back with no `.using()`, on all three models,
   landed in and returned from the right file.
+- **The library logs without a reactor.** `server/logs/cascade.log` carries an INFO line from each
+  of the three public calls, written from a settings module, from `ready()` and from a management
+  command — none of which has a running Twisted reactor:
+
+  ```
+  [INFO] configured aliases: demolib (own database), demogame (own database)
+  [INFO] boot check passed: 2 spec(s) declared, every alias in DATABASES
+  [INFO] migrated: the game database, then on their own: demolib, demogame
+  ```
+
+  This is what `evennia-logging-extension` buys, and the reason the library binds through it rather
+  than through Evennia's own `logger.log_file`. See principle 8 in [CLAUDE.md](../CLAUDE.md).
 
 It also **caught a real defect**: the boot check demanded a `db_spec` per app, which refused a
 library shipping two apps under one spec — the shape the multi-label field exists to serve. The unit
 suite could not see it, because it mocks the distribution metadata this path reads.
-
-## What it has disproved
-
-**The library cannot log, and now does not try.** Evennia's `logger.log_file` writes through
-`deferToThread`, which needs a running Twisted reactor. Every part of this library runs before one
-exists, so a call opened the file and wrote nothing — a 0-byte `cascade.log` beside a gamedir that
-had just refused a migration.
-
-The four call sites were removed and the cases asserting them retired. `log.py` stays, verbatim and
-uncalled, with the reasoning in its docstring. See principle 8 in [CLAUDE.md](../CLAUDE.md).
-
-Consistent with the platform rather than a gap in ours: after a full `evennia migrate` and a
-`cascade_migrate`, this gamedir's `server/logs/` held nothing but `README.md`. Evennia's own
-management commands write no log entry either — `server.log` and `portal.log` come from the running
-processes.

@@ -3,6 +3,35 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-09-12 — One spec owns several app labels
+
+147 tests. `AliasSpec.app_labels` is a tuple and `CascadeRouter` matches a model's label by
+membership, so a library whose apps share one database declares them in one spec. A bare string is
+kept as a one-tuple in `__post_init__`, so the single-app declaration stays terse and a forgotten
+trailing comma cannot leave a string in the field for `in` to substring-match — `RT-17` is the case
+that pins it. Cases `SP-01`, `SP-06`, `SP-07`, `SP-17` and `RT-12` to `RT-17`.
+
+**`spec_is_valid(spec)`** is exported from the package root for consumers to assert in their own
+suites — `assert spec_is_valid(SPEC)`, no Django setup needed. It and `validate_specs` read one
+per-spec rule in `_spec_problems`, so a shape tightened here goes red in every downstream repo's CI
+rather than in a deployment. Cases `SV-01` to `SV-07`; `VS-05`, `VS-06`, `VS-07` and `VS-09` retired
+into them.
+
+**A defect only the demo could see.** The boot check demanded a `db_spec` per app while asking the
+requirement question per distribution, so a library shipping two apps under one spec was refused at
+`django.setup()` — the shape the tuple exists to serve. Both halves now ask at the top-level package:
+one spec answers for everything its library ships. Cases `BC-13` to `BC-15`, and `BC-02` reworded.
+The unit suite could not reach it, because it mocks the distribution metadata that path reads.
+
+What it does **not** check is whether a spec's `app_labels` actually name every app its library
+ships — one left out falls through to `default` silently. Recorded in `installing.md` under what is
+not checked for you, rather than caught.
+
+**Proven live in the demo gamedir**, which now ships `demo_library.extra` as a second app covered by
+its sibling's spec: boot check passes, `evennia cascade_migrate` reports both aliases, both library
+tables land in `demolib.db3` with none in `evennia.db3`, and an ORM write and read back with no
+`.using()` returns from the right file.
+
 ## 2026-09-11 — The refusal paths log
 
 136 tests. Every refusal logs at ERROR before it raises — the log line and the exception carry the
