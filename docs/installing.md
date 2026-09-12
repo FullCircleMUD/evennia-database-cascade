@@ -101,6 +101,32 @@ there to be found. Keep the call at the end of the database section of your sett
 **Why it cannot live anywhere else.** `DATABASES` and `DATABASE_ROUTERS` are read before the app
 registry exists, so `AppConfig.ready()` is too late — see principle 4 in [CLAUDE.md](../CLAUDE.md).
 
+**Make this call last.** Everything it touches has to be in place before it runs: `INSTALLED_APPS`
+complete, and every setting that any package it imports might read already bound in the module Django
+is loading. Nothing that changes `DATABASES` or `DATABASE_ROUTERS` may come after it, since the call
+returns both.
+
+**When settings are split across several files that import one another** — a shared module holding
+what every instance has in common, and a per-instance file importing it — "last" means in the file
+`DJANGO_SETTINGS_MODULE` names, positioned after whatever brings the shared settings in. Not in the
+shared module, however natural that looks.
+
+While the shared module executes, the file Django is loading is still on its import line with an empty
+namespace. That matters because the call runs during settings loading, and can re-enter it: resolving
+an entry in `INSTALLED_APPS` to a package imports that package's parents, and Evennia's own apps
+include `evennia.utils.idmapper` — so `evennia.utils` is imported, which imports Evennia's logger,
+whose class body reads a setting at import time. Django answers that read by rebuilding the settings
+from the file it was named, which is the one still mid-import, so the rebuild produces almost nothing.
+Called last, from that file, everything the imports bound is already there and the same read is
+satisfied.
+
+The symptom is an `AttributeError` for a setting that is plainly set — `CHANNEL_LOG_NUM_TAIL_LINES` is
+the usual one — raised from Evennia's logger during `django.setup()`.
+
+None of this duplicates configuration. Every argument the call takes is per-instance already:
+`GAME_DIR` differs on each, and with it every alias's resolved path, so the same lines are correct in
+each file. [evennia-scaling](../../evennia-scaling/examples) does this across three instances.
+
 ## 5. Choose where each alias lives
 
 Per alias, in the deployment's environment. Three rungs, first match wins:
