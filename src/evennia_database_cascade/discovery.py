@@ -28,6 +28,7 @@ the package ``__init__.py``, which is the first file a consumer's
 """
 
 import importlib
+from collections.abc import Mapping
 
 from .config import (
     ALIAS_URL_PREFIX,
@@ -240,6 +241,16 @@ def _spec_problems(spec):
             f"labels. The router matches models on them, so without one "
             f"nothing reaches that alias."
         )
+
+    if isinstance(spec.session_options, Mapping):
+        search_path = spec.session_options.get("search_path")
+        if search_path and "," in str(search_path):
+            problems.append(
+                f"The spec for alias {spec.alias!r} sets search_path to "
+                f"{search_path!r}, which names more than one schema. "
+                f"cascade_migrate creates the schema search_path names, so "
+                f"name exactly one."
+            )
 
     return problems
 

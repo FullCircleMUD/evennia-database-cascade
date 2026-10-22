@@ -595,6 +595,11 @@ class SpecIsValidTest(unittest.TestCase):
             AliasSpec(app_labels="fcm_xrpl", alias="   "),
             AliasSpec(app_labels="fcm_xrpl", alias="default"),
             AliasSpec(app_labels="fcm_xrpl", alias="my-alias"),
+            AliasSpec(
+                app_labels="mail",
+                alias="mail",
+                session_options={"search_path": "mail, public"},
+            ),
         ]
 
     def test_a_well_shaped_spec_is_valid(self):
@@ -640,6 +645,27 @@ class SpecIsValidTest(unittest.TestCase):
             self.assertTrue(
                 spec_is_valid(AliasSpec(app_labels="app", alias=alias)), msg=alias
             )
+
+    def test_a_search_path_naming_several_schemas_is_invalid(self):
+        """SV-08 — cascade_migrate creates the schema, so it must name one."""
+        self.assertFalse(
+            spec_is_valid(
+                AliasSpec(
+                    app_labels="mail",
+                    alias="mail",
+                    session_options={"search_path": "mail, public"},
+                )
+            )
+        )
+        self.assertTrue(
+            spec_is_valid(
+                AliasSpec(
+                    app_labels="mail",
+                    alias="mail",
+                    session_options={"search_path": "mail"},
+                )
+            )
+        )
 
     def test_spec_is_valid_is_exported_from_the_package_root(self):
         """SV-06 — a consumer imports it the way they import AliasSpec."""
@@ -1703,6 +1729,10 @@ class MigrateAllTest(unittest.TestCase):
         self.installed = {}
         # alias -> engine, so a case can make one non-Postgres.
         self.engines = {}
+        # (alias, schema, migrate calls made before it), one per creation.
+        self.schemas = []
+        # Kept before the patch below replaces it, for MG-19 and MG-21.
+        self.real_create_schema = migrate_module.create_schema
 
         def record(*args, **options):
             self.calls.append((args, options))
@@ -1712,11 +1742,16 @@ class MigrateAllTest(unittest.TestCase):
                 return None
             return set(self.installed.get(alias, ()))
 
+        def create_schema(alias, name):
+            self.schemas.append((alias, name, len(self.calls)))
+            return True
+
         patches = [
             mock.patch.object(migrate_module, "call_command", record),
             mock.patch.object(
                 migrate_module, "installed_extensions", installed_extensions
             ),
+            mock.patch.object(migrate_module, "create_schema", create_schema),
         ]
         for patch in patches:
             patch.start()
@@ -1935,6 +1970,89 @@ class MigrateAllTest(unittest.TestCase):
         self.assertIn("[INFO]", logged)
         self.assertIn("messagebus", logged)
         self.assertIn("xrpl", logged)
+
+    def test_a_search_path_schema_is_created_before_any_migration(self):
+        """MG-17 — the schema exists before the first migrate runs."""
+        app = self.app(
+            "mg17_app",
+            app_labels="mg17_app",
+            alias="mail",
+            session_options={"search_path": "mail"},
+        )
+
+        migrate_all([app], {})
+
+        self.assertEqual(self.schemas, [("mail", "mail", 0)])
+        self.assertEqual(self.aliases_migrated(), ["mail"])
+
+    def test_no_search_path_means_no_schema(self):
+        """MG-18 — tables go in public, which every database has."""
+        app = self.app(
+            "mg18_app",
+            app_labels="mg18_app",
+            alias="xrpl",
+            session_options={"statement_timeout": "5000"},
+        )
+
+        migrate_all([app], {})
+
+        self.assertEqual(self.schemas, [])
+
+    def test_create_schema_does_nothing_on_a_non_postgres_alias(self):
+        """MG-19 — SQLite has no schemas, and its connection is not touched."""
+        databases = {"mail": {"ENGINE": "django.db.backends.sqlite3"}}
+
+        with mock.patch.object(
+            migrate_module, "get_databases", lambda: databases
+        ), mock.patch("django.db.connections") as connections:
+            result = self.real_create_schema("mail", "mail")
+
+        self.assertFalse(result)
+        connections.__getitem__.assert_not_called()
+
+    def test_a_schema_that_cannot_be_created_refuses_before_any_migration(self):
+        """MG-20 — raises first, naming alias and schema; logged with the same text."""
+        clear_logs()
+        app = self.app(
+            "mg20_app",
+            app_labels="mg20_app",
+            alias="mail",
+            session_options={"search_path": "mail"},
+        )
+
+        def refuse(alias, name):
+            raise ValueError("permission denied for database")
+
+        with mock.patch.object(migrate_module, "create_schema", refuse):
+            with self.assertRaises(ImproperlyConfigured) as caught:
+                migrate_all([app], {})
+
+        message = str(caught.exception)
+        self.assertIn("'mail'", message)
+        self.assertIn("permission denied", message)
+        self.assertEqual(self.calls, [])
+        logged = read_back_logs()
+        self.assertIn("[ERROR]", logged)
+        self.assertIn(message, logged)
+
+    def test_create_schema_issues_create_schema_if_not_exists(self):
+        """MG-21 — on the alias's own connection, the name quoted by the backend."""
+        databases = {"mail": {"ENGINE": "django.db.backends.postgresql"}}
+        cursor = mock.MagicMock()
+        connection = mock.MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        connection.ops.quote_name = lambda name: f'"{name}"'
+        connections = mock.MagicMock()
+        connections.__getitem__.return_value = connection
+
+        with mock.patch.object(
+            migrate_module, "get_databases", lambda: databases
+        ), mock.patch("django.db.connections", connections):
+            result = self.real_create_schema("mail", "mail")
+
+        self.assertTrue(result)
+        connections.__getitem__.assert_called_once_with("mail")
+        cursor.execute.assert_called_once_with('CREATE SCHEMA IF NOT EXISTS "mail"')
 
 
 def _on_a_real_thread(target):

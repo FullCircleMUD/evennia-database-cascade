@@ -139,6 +139,7 @@ only: the cross-spec collisions stay in `validate_specs`, because a single libra
 | SV-05 | An alias that is not a valid environment-variable name is invalid — a hyphen, a space, a leading digit. The alias becomes `DATABASE_URL_<ALIAS>`, so one no shell can export is an alias nobody can deploy | `test_an_alias_that_cannot_be_an_environment_variable_is_invalid` |
 | SV-06 | Exported from the package root, so a consumer imports it the way they import `AliasSpec` | `test_spec_is_valid_is_exported_from_the_package_root` |
 | SV-07 | Every shape it refuses, `validate_specs` refuses too — the consumer check and the configure-time check read one rule and cannot drift | `test_every_refused_shape_is_refused_by_validate_specs` |
+| SV-08 | A `search_path` in `session_options` naming more than one schema — it contains a comma — is invalid. `cascade_migrate` creates the schema it names, so it must name exactly one | `test_a_search_path_naming_several_schemas_is_invalid` |
 
 ## RS — `resolve_database(spec, game_dir, env, common_url_var)`
 
@@ -346,6 +347,13 @@ so the raise carries the command for a human to run. It refuses before the bare 
 migration that creates a vector column against a database without the extension fails halfway rather
 than cleanly.
 
+**A `search_path` schema is created, not just checked.** An alias whose `session_options` set
+`search_path` puts its tables in that schema, and neither Django's `migrate` nor Postgres creates it —
+the first table has nowhere to go. Creating a schema needs only ownership of the database, which the
+application role has, so this one is done rather than reported: `CREATE SCHEMA IF NOT EXISTS` on the
+alias's own connection, after the extension check and before any migration. Postgres only; SQLite
+has no schemas.
+
 `common_url_var` comes from `CASCADE_COMMON_URL_VAR`, this library's only setting — read through an
 accessor in `config.py`, defaulting to `DATABASE_URL`. It exists because the value has to be known in
 two processes: the consumer passes it to `configure()` from their settings module, and the helper
@@ -369,6 +377,11 @@ reads it back from the same place.
 | MG-14 | Skipped on a non-Postgres alias, where there are no extensions to have | `test_the_check_is_skipped_on_a_non_postgres_alias` |
 | MG-15 | A missing-extension refusal is logged at ERROR before `ImproperlyConfigured` raises, the log line and the exception carrying the same text — read back from disk, never mocked | `test_a_missing_extension_refusal_is_logged_before_the_raise` |
 | MG-16 | A successful `migrate_all` writes one INFO line naming the bare migrate and each split alias migrated — read back from disk | `test_a_successful_migrate_logs_what_was_migrated` |
+| MG-17 | An alias whose `session_options` set `search_path` has its schema created before any migration runs | `test_a_search_path_schema_is_created_before_any_migration` |
+| MG-18 | An alias with no `search_path` has no schema created | `test_no_search_path_means_no_schema` |
+| MG-19 | `create_schema` does nothing on a non-Postgres alias, and does not touch its connection | `test_create_schema_does_nothing_on_a_non_postgres_alias` |
+| MG-20 | A schema that cannot be created raises `ImproperlyConfigured` before any migration runs, naming the alias and the schema, logged at ERROR with the same text — read back from disk | `test_a_schema_that_cannot_be_created_refuses_before_any_migration` |
+| MG-21 | `create_schema` issues `CREATE SCHEMA IF NOT EXISTS` on the alias's own connection, the name quoted by the backend, so a rerun against an existing schema is harmless | `test_create_schema_issues_create_schema_if_not_exists` |
 
 ## TH — `defer_to_db_thread()`
 

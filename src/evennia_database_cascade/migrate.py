@@ -17,6 +17,7 @@ built to prevent.
 """
 
 import os
+from collections.abc import Mapping
 
 from django.core.management import call_command
 
@@ -43,6 +44,65 @@ def installed_extensions(alias):
     with connections[alias].cursor() as cursor:
         cursor.execute("SELECT extname FROM pg_extension")
         return {row[0] for row in cursor.fetchall()}
+
+
+def create_schema(alias, name):
+    """Create one schema on one alias's database, if it is Postgres.
+
+    Args:
+        alias (str): the alias whose connection runs the statement.
+        name (str): the schema to create.
+
+    Returns:
+        bool: True where the statement ran, False where the alias is not
+            Postgres and has no schemas.
+    """
+    from django.db import connections
+
+    if "postgresql" not in get_databases()[alias].get("ENGINE", ""):
+        return False
+
+    connection = connections[alias]
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"CREATE SCHEMA IF NOT EXISTS {connection.ops.quote_name(name)}"
+        )
+    return True
+
+
+def _create_schemas(specs):
+    """Create the schema each alias's ``search_path`` names, before migrating.
+
+    Neither Django's migrate nor Postgres creates one, so an alias pointed at
+    a missing schema has nowhere to put its first table. Unlike an extension
+    this needs no superuser — the role owns its database — so it is done
+    rather than reported.
+
+    Args:
+        specs (list): the discovered specs.
+
+    Raises:
+        ImproperlyConfigured: a schema could not be created.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+
+    for spec in specs:
+        if not isinstance(spec.session_options, Mapping):
+            continue
+        name = spec.session_options.get("search_path")
+        if not name:
+            continue
+        try:
+            create_schema(spec.alias, name)
+        except Exception as error:
+            message = (
+                f"{spec.alias!r} puts its tables in the schema {name!r}, "
+                f"which could not be created: {error}"
+            )
+            from .log import cascade_log
+
+            cascade_log(message, level="ERROR")
+            raise ImproperlyConfigured(message) from error
 
 
 def _refuse_missing_extensions(specs):
@@ -119,7 +179,8 @@ def migrate_all(installed_apps=None, env=None, **options):
     Raises:
         TypeError: ``database`` was passed.
         ImproperlyConfigured: an alias needs a Postgres extension its
-            database does not have.
+            database does not have, or a schema its ``search_path`` names
+            could not be created.
     """
     if "database" in options:
         raise TypeError(
@@ -135,6 +196,7 @@ def migrate_all(installed_apps=None, env=None, **options):
 
     specs = discover_specs(installed_apps)
     _refuse_missing_extensions(specs)
+    _create_schemas(specs)
     split = split_aliases(specs, env, get_common_url_var())
 
     # Covers `default` and every alias sharing its database, because no router
