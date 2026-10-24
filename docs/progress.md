@@ -3,6 +3,12 @@
 Reverse-chronological milestone log. Newest first. Each entry states what became true and what proves
 it.
 
+## 2026-10-24 — The dispatch moved to evennia-db-threads
+
+`defer_to_db_thread` now lives in `evennia-db-threads`, with its cases; this library no longer offers
+it. TH-01 to TH-06 retired, TH-07 kept, TH-08 added — the package root offers no dispatch. 155 tests,
+OK.
+
 ## 2026-09-12 — One spec owns several app labels
 
 147 tests. `AliasSpec.app_labels` is a tuple and `CascadeRouter` matches a model's label by

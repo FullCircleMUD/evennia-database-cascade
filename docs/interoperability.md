@@ -69,6 +69,13 @@ no router, nothing persisted through the ORM, so there is no alias for this libr
 
 This library.
 
+## evennia-db-threads
+
+**No coupling.** Running database work off the reactor without leaving connections on the worker
+thread is `evennia-db-threads`' `defer_to_db_thread`. This library does not offer it (TH-08). The two
+meet only in a game: the more aliases this library places, the more connections a worker thread could
+leave behind without it.
+
 ## evennia-equipment
 
 **No coupling.** Neither library imports the other. Equipment owns no tables — its state is Evennia

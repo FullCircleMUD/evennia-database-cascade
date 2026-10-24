@@ -28,7 +28,7 @@ that file is source material, not a commitment.
 | `CF` | `configure` — the one call a consumer makes, tying the rest together |
 | `BC` | `check_settings` — the boot check, in `AppConfig.ready()` |
 | `MG` | `migrate_all` and `evennia cascade_migrate` — reaching every split alias |
-| `TH` | `defer_to_db_thread` — leaving the reactor without leaking a connection |
+| `TH` | The dispatch is not this library's — `defer_to_db_thread` is `evennia-db-threads`' |
 
 ## Fixtures
 
@@ -383,47 +383,20 @@ reads it back from the same place.
 | MG-20 | A schema that cannot be created raises `ImproperlyConfigured` before any migration runs, naming the alias and the schema, logged at ERROR with the same text — read back from disk | `test_a_schema_that_cannot_be_created_refuses_before_any_migration` |
 | MG-21 | `create_schema` issues `CREATE SCHEMA IF NOT EXISTS` on the alias's own connection, the name quoted by the backend, so a rerun against an existing schema is harmless | `test_create_schema_issues_create_schema_if_not_exists` |
 
-## TH — `defer_to_db_thread()`
+## TH — the dispatch is not this library's
 
-Django holds connections in thread-local storage, one per thread and alias, opened lazily on first
-use. Nothing in a Twisted worker thread ever closes them: the `request_started` / `request_finished`
-signals that drive `close_old_connections()` fire for the web request cycle only. So a thread
-dispatched with `deferToThread` opens its connections and keeps them for the life of the thread, and
-the reactor's pool holds its threads indefinitely.
-
-The result is a fixed pool of idle connections per process — one for every alias each pooled thread
-has ever touched, multiplied by the number of game processes. Measured in FCM against a
-`max_connections` of 50: 47 idle, across four databases, with shop commands and the web server both
-refused.
-
-**This library's concern because this library multiplies the aliases.** The count is per thread *per
-alias*, and giving a library an alias of its own is what `configure()` is for. It is also the
-`CONN_MAX_AGE = 0` decision from the other side: one is the connection a request holds, this is the
-connection a worker thread holds.
-
-**The close happens on the worker thread, and that is the whole design.** The call site, the callback
-and the errback all run on the reactor, and `close_all()` there would walk the reactor's own
-connections rather than the worker's. Wrapping the target function is the only place a `finally`
-executes on the right side of the boundary.
-
-**Imports inside the function.** `django.db` and `twisted` are reached when the function runs, not
-when the module loads, so the module body stays a bare `def` and the name is safe to re-export from
-`__init__.py`. Nothing Django is imported while a consumer's settings module is still executing.
+`defer_to_db_thread` — running database work on a worker thread and closing that thread's connections
+when it ends — is `evennia-db-threads`'. This library does not offer it, so a consumer has one place
+to import it from.
 
 | ID | Case | Test function |
 |---|---|---|
-| TH-01 | The target's return value arrives through the Deferred | `test_the_return_value_arrives_through_the_deferred` |
-| TH-02 | Positional and keyword arguments reach the target untouched | `test_arguments_reach_the_target_untouched` |
-| TH-03 | The connections are closed after the target returns | `test_the_connections_are_closed_after_the_target_returns` |
-| TH-04 | The connections are closed when the target raises, and the failure still reaches the errback | `test_the_connections_are_closed_when_the_target_raises` |
-| TH-05 | The close runs on the worker thread, not the thread that dispatched | `test_the_close_runs_on_the_worker_thread` |
-| TH-06 | `defer_to_db_thread` resolves from the package root | `test_the_dispatch_resolves_from_the_package_root` |
 | TH-07 | Importing the package root imports neither Django nor Twisted | `test_the_package_root_imports_neither_django_nor_twisted` |
+| TH-08 | The package root offers no `defer_to_db_thread` | `test_the_package_root_offers_no_dispatch` |
 
-- **TH-04** is the case that matters in production. An exhausted pool makes every later query raise,
-  so a close that only ran on success would leak a connection per failure — fastest exactly when
-  things are already going wrong.
-- **TH-05** is what a `finally` at the call site would get wrong while looking correct. Asserting
-  *where* it ran is the only way to tell the two apart.
-- **TH-07** keeps the re-export honest. A module-scope Django import here raises inside a consumer's
-  settings module, before the server starts.
+**Retired: TH-01 to TH-06** — the dispatch's behaviour, covered by `evennia-db-threads`' TH cases.
+
+- **TH-07** keeps the package root off the settings path's forbidden list. A module-scope Django import
+  reached from here raises inside a consumer's settings module, before the server starts.
+- **TH-08** keeps the dispatch in one place. A second import path is how the library meant for it was
+  missed.

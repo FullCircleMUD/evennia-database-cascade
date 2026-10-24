@@ -7,10 +7,10 @@ submodule.
 
 **No module body reached from here may import Django.** This file is the first
 one a consumer's ``settings.py`` opens, while that settings module is still
-executing — see ``discovery.py`` for the full statement of that constraint. A
-function body is not a module body: ``defer_to_db_thread`` reaches Django and
-Twisted when it is called, long after ``django.setup()``, and importing it
-costs a ``def``.
+executing — see ``discovery.py`` for the full statement of that constraint.
+
+Running database work off the reactor is ``evennia-db-threads``'
+``defer_to_db_thread``, not this library's.
 
 See docs/progress.md for what exists, and docs/test-plan.md for what the
 library commits to covering.
@@ -19,8 +19,7 @@ library commits to covering.
 from .configure import configure
 from .discovery import spec_is_valid
 from .spec import AliasSpec
-from .threads import defer_to_db_thread
 
-__all__ = ["AliasSpec", "configure", "defer_to_db_thread", "spec_is_valid"]
+__all__ = ["AliasSpec", "configure", "spec_is_valid"]
 
 __version__ = "0.0.1"

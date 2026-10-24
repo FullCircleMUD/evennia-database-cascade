@@ -19,13 +19,11 @@ import pathlib
 import shutil
 import sys
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
 from django.core.exceptions import ImproperlyConfigured
 
-from evennia_database_cascade.threads import defer_to_db_thread
 
 import evennia_database_cascade
 from evennia_database_cascade import AliasSpec
@@ -2055,123 +2053,15 @@ class MigrateAllTest(unittest.TestCase):
         cursor.execute.assert_called_once_with('CREATE SCHEMA IF NOT EXISTS "mail"')
 
 
-def _on_a_real_thread(target):
-    """Stand in for ``deferToThread``: run the callable on its own thread.
+class PackageRootTest(unittest.TestCase):
+    """TH — the dispatch is not this library's, and the package root stays light."""
 
-    The wrapper under test builds a closure and hands it to
-    ``deferToThread``; what these cases are about is the closure — argument
-    forwarding, and the ``finally`` running on the far side of the thread
-    boundary. Running it on a real thread keeps thread identity assertable
-    while needing no reactor, which cannot be started and stopped per case:
-    a Twisted thread pool does not restart after it is stopped.
-    """
-    from twisted.internet import defer
-    from twisted.python.failure import Failure
-
-    outcome = {}
-
-    def wrapper():
-        try:
-            outcome["value"] = target()
-        except BaseException:
-            outcome["failure"] = Failure()
-
-    thread = threading.Thread(target=wrapper)
-    thread.start()
-    thread.join()
-
-    if "failure" in outcome:
-        return defer.fail(outcome["failure"])
-    return defer.succeed(outcome["value"])
-
-
-class DeferToDbThreadTest(unittest.TestCase):
-    """TH — leaving the reactor without leaking a connection."""
-
-    def dispatch(self, fn, *args, **kwargs):
-        """Run a dispatch to completion and return what the Deferred fired."""
-        fired = {}
-        with mock.patch(
-            "twisted.internet.threads.deferToThread", side_effect=_on_a_real_thread
-        ):
-            deferred = defer_to_db_thread(fn, *args, **kwargs)
-        deferred.addBoth(lambda result: fired.setdefault("result", result))
-        return fired["result"]
-
-    def test_the_return_value_arrives_through_the_deferred(self):
-        """TH-01 — the target's return value comes back."""
-        with mock.patch("django.db.connections.close_all"):
-            self.assertEqual(self.dispatch(lambda: "answer"), "answer")
-
-    def test_arguments_reach_the_target_untouched(self):
-        """TH-02 — positional and keyword arguments are forwarded."""
-        seen = {}
-
-        def target(first, second, third=None):
-            seen.update(first=first, second=second, third=third)
-
-        with mock.patch("django.db.connections.close_all"):
-            self.dispatch(target, 1, 2, third=3)
-
-        self.assertEqual(seen, {"first": 1, "second": 2, "third": 3})
-
-    def test_the_connections_are_closed_after_the_target_returns(self):
-        """TH-03 — a successful call releases its connections."""
-        with mock.patch("django.db.connections.close_all") as closed:
-            self.dispatch(lambda: None)
-
-        closed.assert_called_once_with()
-
-    def test_the_connections_are_closed_when_the_target_raises(self):
-        """TH-04 — the failure path releases them too, and still fails."""
-
-        def target():
-            raise RuntimeError("the query went wrong")
-
-        with mock.patch("django.db.connections.close_all") as closed:
-            result = self.dispatch(target)
-
-        closed.assert_called_once_with()
-        self.assertEqual(result.type, RuntimeError)
-
-    def test_the_close_runs_on_the_worker_thread(self):
-        """TH-05 — closed where the connections are, not where we dispatched."""
-        dispatching = threading.current_thread().ident
-        seen = {}
-
-        def target():
-            seen["target"] = threading.current_thread().ident
-
-        def closing():
-            seen["close"] = threading.current_thread().ident
-
-        with mock.patch("django.db.connections.close_all", side_effect=closing):
-            self.dispatch(target)
-
-        self.assertEqual(
-            seen["close"],
-            seen["target"],
-            "the close ran on a different thread from the work",
-        )
-        self.assertNotEqual(
-            seen["close"],
-            dispatching,
-            "the close ran on the dispatching thread, whose connections are "
-            "not the ones that were opened",
-        )
-
-
-class DeferToDbThreadSurfaceTest(unittest.TestCase):
-    """TH — the name is published, and publishing it costs nothing at import."""
-
-    def test_the_dispatch_resolves_from_the_package_root(self):
-        """TH-06 — a consumer imports it from the package, not a submodule."""
+    def test_the_package_root_offers_no_dispatch(self):
+        """TH-08 — defer_to_db_thread is evennia-db-threads'."""
         import evennia_database_cascade
 
-        self.assertIn("defer_to_db_thread", evennia_database_cascade.__all__)
-        self.assertIs(
-            evennia_database_cascade.defer_to_db_thread, defer_to_db_thread
-        )
+        self.assertNotIn("defer_to_db_thread", evennia_database_cascade.__all__)
+        self.assertFalse(hasattr(evennia_database_cascade, "defer_to_db_thread"))
 
     def test_the_package_root_imports_neither_django_nor_twisted(self):
         """TH-07 — the settings path stays clear of both."""
